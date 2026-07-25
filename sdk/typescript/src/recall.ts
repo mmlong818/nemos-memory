@@ -133,8 +133,9 @@ export class RecallService {
       includeInvalidated: plan.include_historical,
     };
     const scope = plan.scopes.length === 0 ? undefined : plan.scopes.length === 1 ? plan.scopes[0] : plan.scopes;
+    const claimChannel = await this.runChannel("claim", () => this.claimCandidates(plan));
     const channelTasks: Array<Promise<ChannelResult>> = [
-      this.runChannel("claim", () => this.claimCandidates(plan)),
+      Promise.resolve(claimChannel),
       this.runChannel("fts", () =>
         this.options.storage.searchFts(
           this.options.tenantId,
@@ -146,9 +147,13 @@ export class RecallService {
           filter,
         )),
     ];
-    if (this.options.embedding) {
+    const hasExactClaim = plan.claim_keys.length > 0 && !plan.include_historical && !plan.time_range
+      && claimChannel.memories.some((memory) => admissionFailure(memory, plan, recallOptions) === null);
+    let queryVector: Promise<Float32Array> | null = null;
+    if (this.options.embedding && !hasExactClaim) {
+      queryVector = this.options.embedding.embed(plan.query);
       channelTasks.push(this.runChannel("embedding", async () => {
-        const vector = await this.options.embedding!.embed(plan.query);
+        const vector = await queryVector!;
         return this.options.storage.searchEmbedding(
           this.options.tenantId,
           this.options.userId,
@@ -222,7 +227,7 @@ export class RecallService {
 
     if (plan.include_evidence && !hasTargetClaim(items, plan)) {
       const evidence = await this.runChannel("evidence", () =>
-        this.evidenceCandidates(plan, recallOptions));
+        this.evidenceCandidates(plan, recallOptions, queryVector ?? undefined));
       evidence.memories = evidence.memories.filter((memory) => {
         const reason = evidenceAdmissionFailure(memory, plan, recallOptions);
         if (reason) rejected.push({ memory_id: memory.id, reason });
@@ -314,7 +319,7 @@ export class RecallService {
       .sort((left, right) => right.created_at.localeCompare(left.created_at))
       .slice(0, plan.max_candidates_per_channel);
   }
-  private async evidenceCandidates(plan: QueryPlan, options: RecallOptions): Promise<Memory[]> {
+  private async evidenceCandidates(plan: QueryPlan, options: RecallOptions, queryVector?: Promise<Float32Array>): Promise<Memory[]> {
     const scope = plan.scopes.length === 0 ? undefined : plan.scopes.length === 1 ? plan.scopes[0] : plan.scopes;
     const filter = {
       includeSensitive: plan.include_sensitive,
@@ -329,7 +334,7 @@ export class RecallService {
     let semantic: Memory[] = [];
     if (this.options.embedding) {
       try {
-        const vector = await this.options.embedding.embed(plan.query);
+        const vector = await (queryVector ?? this.options.embedding.embed(plan.query));
         semantic = this.options.storage.searchEmbedding(
           this.options.tenantId,
           this.options.userId,
@@ -487,7 +492,10 @@ function inferPredicates(query: string): string[] {
   if (/住|居住|现居|城市|哪里|哪儿|residen|live/i.test(query)) values.push("residence.current");
   if (/公司|单位|就职|工作在哪|employ|company/i.test(query)) values.push("employment.organization");
   if (/职位|岗位|职业|role|job title/i.test(query)) values.push("employment.role");
-  if (/喜欢吃|忌口|食物|food/i.test(query)) values.push("preference.food");
+  const healthIntent = /健康|过敏|health|allerg/i.test(query);
+  if (healthIntent) values.push("constraint.health");
+  if (/颜色|最喜欢什么色|favou?rite colou?r/i.test(query)) values.push("preference.color");
+  if (/喜欢吃|忌口|食物|food/i.test(query) && !healthIntent) values.push("preference.food");
   if (/饮食|diet|vegetarian|vegan|pescatarian/i.test(query)) values.push("preference.diet");
   if (/感情|婚姻|relationship status|marital status/i.test(query)) values.push("relationship.status");
   if (/健身房|gym|fitness/i.test(query)) values.push("membership.gym");
@@ -495,7 +503,6 @@ function inferPredicates(query: string): string[] {
   if (/通勤|commute|go to work/i.test(query)) values.push("commute.mode");
   if (/汽车|车辆|开什么车|current car|driving/i.test(query)) values.push("possession.vehicle");
   if (/沟通|回复风格|communication style/i.test(query)) values.push("preference.communication_style");
-  if (/健康|过敏|health|allerg/i.test(query)) values.push("constraint.health");
   return values;
 }
 

@@ -46,6 +46,85 @@ test("v0.7.2 query plan: current personal question maps to a deterministic claim
   assert.ok(plan.max_results <= 12);
 });
 
+test("v0.7.4 query plan prioritizes health constraints over food preferences", () => {
+  const allergy = planRecallQuery("我有什么食物过敏？");
+  const color = planRecallQuery("我最喜欢什么颜色？");
+
+  assert.deepEqual(allergy.predicates, ["constraint.health"]);
+  assert.deepEqual(color.predicates, ["preference.color"]);
+});
+
+test("v0.7.4 exact current claims skip remote query embedding", async () => {
+  let embeddingCalls = 0;
+  const nemos = new Nemos({
+    storage: { type: "memory" },
+    llm: makeMockLLMConfig(),
+    embedding: {
+      provider: "custom",
+      modelId: "test-embedding",
+      dim: 2,
+      embed: async () => {
+        embeddingCalls += 1;
+        return new Float32Array([1, 0]);
+      },
+    },
+    features: { autoLinking: false },
+    worker: { manualWorker: true },
+  });
+  const user = nemos.forUser("alice");
+  await user.write(fact("I live in Xiamen.", "Xiamen", "2026-07-10"));
+  embeddingCalls = 0;
+
+  const packet = await user.recall("我现在住在哪里？");
+
+  assert.equal(packet.items[0]?.memory.object_json, "Xiamen");
+  assert.equal(embeddingCalls, 0);
+
+  await user.write({
+    layer: "personal_semantic",
+    content: "My favorite color is green.",
+    source: { authoritative: false, origin: "test:user", chain_depth: 1 },
+    subject: "user:self",
+    predicate: "preference.color",
+    object: "green",
+    trustTier: 1,
+    utteranceMode: "literal",
+  });
+  embeddingCalls = 0;
+  const preference = await user.recall("我最喜欢什么颜色？");
+  assert.equal(preference.items[0]?.memory.object_json, "green");
+  assert.equal(embeddingCalls, 0);
+  await nemos.close();
+});
+
+test("v0.7.4 evidence fallback reuses the query embedding", async () => {
+  let embeddingCalls = 0;
+  const nemos = new Nemos({
+    storage: { type: "memory" },
+    llm: makeMockLLMConfig(),
+    embedding: {
+      provider: "custom",
+      modelId: "test-embedding",
+      dim: 2,
+      embed: async () => {
+        embeddingCalls += 1;
+        return new Float32Array([1, 0]);
+      },
+    },
+    features: { autoLinking: false },
+    worker: { manualWorker: true },
+  });
+  const user = nemos.forUser("alice");
+  await user.ingest("项目代号是星桥", { skipAnalysis: true });
+  embeddingCalls = 0;
+
+  const packet = await user.recall("项目代号是什么？");
+
+  assert.ok(packet.items.some((item) => item.memory.content.includes("星桥")));
+  assert.equal(embeddingCalls, 1);
+  await nemos.close();
+});
+
 test("v0.7.2 episode questions also search durable personal facts", async () => {
   const plan = planRecallQuery("When did you start learning to play the cello?");
   assert.equal(plan.intent, "episode");

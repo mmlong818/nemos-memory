@@ -49,6 +49,13 @@ export function reconcileAndCommit(
       return { memory, inserted: true, operation, hasConflict: false };
     }
 
+    // When an event time exists, use it as the implicit validity start before
+    // storage can backfill valid_at with ingestion time. Without event time we
+    // deliberately keep valid_at empty so event_seq remains the ordering source.
+    if (memory.valid_at === undefined && memory.event_at !== undefined) {
+      memory.valid_at = memory.event_at;
+    }
+
     const predicate = getPredicate(memory.predicate);
     const entries = storage.listClaimEntries(tenantId, userId, memory.scope, memory.claim_key);
     const equivalent = entries.find((entry) => entry.canonical_object_hash === memory.canonical_object_hash);

@@ -58,6 +58,39 @@ test("v0.7.1 reconcile: a newer equal-trust single-valued fact supersedes the ol
   await nemos.close();
 });
 
+test("v0.7.4 reconcile: event time is the validity fallback for structured facts", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const oldFact = await user.write(assertion("I currently live in Fuzhou.", "Fuzhou", {
+    eventAt: "2026-06-01T09:00:00+08:00",
+  }));
+  const current = await user.write(assertion("I moved to Xiamen and now live there.", "Xiamen", {
+    eventAt: "2026-07-10T09:00:00+08:00",
+  }));
+
+  assert.equal(oldFact.valid_at, "2026-06-01T09:00:00+08:00");
+  assert.equal(current.valid_at, "2026-07-10T09:00:00+08:00");
+  assert.equal(nemos.raw().storage.findById("default", "alice", oldFact.id)?.belief_state, "superseded");
+  assert.equal(nemos.raw().storage.findById("default", "alice", current.id)?.belief_state, undefined);
+  assert.equal((await user.listOperations(current.claim_key)).at(-1)?.kind, "SUPERSEDE");
+  await nemos.close();
+});
+
+test("v0.7.4 reconcile: late extraction still follows event time without validFrom", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const current = await user.write(assertion("I currently live in Xiamen.", "Xiamen", {
+    eventAt: "2026-07-10T09:00:00+08:00",
+  }));
+  const lateOld = await user.write(assertion("I lived in Fuzhou before that.", "Fuzhou", {
+    eventAt: "2026-06-01T09:00:00+08:00",
+  }));
+
+  assert.equal(nemos.raw().storage.findById("default", "alice", current.id)?.belief_state, undefined);
+  assert.equal(nemos.raw().storage.findById("default", "alice", lateOld.id)?.belief_state, "superseded");
+  await nemos.close();
+});
+
 test("v0.7.1 reconcile: an older event arriving later cannot overwrite the current fact", async () => {
   const nemos = createNemos();
   const user = nemos.forUser("alice");
@@ -270,6 +303,64 @@ test("v0.7.3 ingest persists controlled claims from raw user text even when the 
     await nemos.close();
   }
 });
+test("v0.7.4 deterministic Chinese residence updates do not depend on LLM claim fields", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const oldResult = await user.ingest("我现在住在福州。", {
+    contentDate: "2026-06-01T09:00:00+08:00",
+  });
+  const currentResult = await user.ingest("我已经从福州搬到厦门，现在常住厦门。", {
+    contentDate: "2026-07-10T09:00:00+08:00",
+  });
+  const oldFact = oldResult.derived.find((memory) => memory.predicate === "residence.current");
+  const current = currentResult.derived.find((memory) =>
+    memory.predicate === "residence.current" && memory.object_json === "厦门"
+  );
+
+  assert.ok(oldFact);
+  assert.ok(current);
+  assert.equal(nemos.raw().storage.findById("default", "alice", oldFact.id)?.belief_state, "superseded");
+  assert.equal(nemos.raw().storage.findById("default", "alice", current.id)?.belief_state, undefined);
+  await nemos.close();
+});
+
+test("v0.7.4 deterministic color preferences remain isolated by user", async () => {
+  const nemos = createNemos();
+  const alice = await nemos.forUser("alice").ingest("我最喜欢的颜色是绿色。");
+  const bob = await nemos.forUser("bob").ingest("我最喜欢的颜色是橙色。");
+
+  assert.equal(alice.derived.find((memory) => memory.predicate === "preference.color")?.object_json, "绿色");
+  assert.equal(bob.derived.find((memory) => memory.predicate === "preference.color")?.object_json, "橙色");
+  assert.ok(!(await nemos.forUser("alice").listByLayer("personal_semantic", { limit: 20 }))
+    .some((memory) => memory.object_json === "橙色"));
+  await nemos.close();
+});
+
+test("v0.7.4 deterministic ingest preserves first-person allergy constraints", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const result = await user.ingest("我对花生严重过敏，平时喝无糖美式。", {
+    contentDate: "2026-07-02T10:00:00+08:00",
+  });
+  const allergy = result.derived.find((memory) => memory.predicate === "constraint.health");
+
+  assert.ok(allergy);
+  assert.deepEqual(allergy.object_json, ["花生"]);
+  assert.equal(allergy.event_at, "2026-07-02T10:00:00+08:00");
+  assert.equal(allergy.valid_at, "2026-07-02T10:00:00+08:00");
+  await nemos.close();
+});
+
+test("v0.7.4 deterministic allergy extraction ignores quoted third-party facts", async () => {
+  const nemos = createNemos();
+  const result = await nemos.forUser("alice").ingest("小林告诉我，他对花生过敏。至于我，我没有任何食物过敏。");
+
+  assert.ok(!result.derived.some((memory) =>
+    memory.predicate === "constraint.health" && JSON.stringify(memory.object_json).includes("花生")
+  ));
+  await nemos.close();
+});
+
 test("v0.7.3 deterministic ingest rejects hypothetical and research-document claims", async () => {
   const nemos = createNemos();
   const user = nemos.forUser("alice");

@@ -18,6 +18,7 @@ const PREDICATES: PredicateDefinition[] = [
   define("employment.role", ["job title", "role", "职位", "岗位", "职业"], "string", true, [], "current"),
   define("relationship.family", ["family", "家庭关系", "亲属", "家人"], "entity_set", false, ["relation"], "current"),
   define("preference.food", ["food preference", "饮食偏好", "喜欢吃", "不吃"], "string_set", false, ["polarity"], "current"),
+  define("preference.color", ["favorite color", "colour preference", "最喜欢的颜色", "喜欢什么颜色"], "string", true, [], "current"),
   define("preference.diet", ["diet", "dietary pattern", "饮食方式", "饮食习惯"], "string", true, [], "current"),
   define("relationship.status", ["relationship status", "marital status", "感情状态", "婚姻状态"], "string", true, [], "current"),
   define("membership.gym", ["gym membership", "健身房会员", "健身房"], "entity", true, [], "current"),
@@ -215,18 +216,25 @@ export function inferControlledAssertions(content: string): AssertionCandidate[]
 
   const candidates: AssertionCandidate[] = [];
   const seen = new Set<string>();
-  for (const segment of text.split(/(?<=[。！？.!?])\s+|\n+/u)) {
-    const inferred = inferControlledPersonalClaim(segment);
-    if (!inferred?.predicate || inferred.object === undefined) continue;
-    const key = inferred.predicate + ":" + canonicalJson(inferred.object);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    candidates.push({
-      subject: "user:self",
-      ...inferred,
-      utteranceMode,
-      trustTier: 1,
-    });
+  for (const segment of text.split(/(?<=[。！？.!?])\s*|\n+/u)) {
+    const inferredClaims = [
+      inferControlledPersonalClaim(segment),
+      inferResidenceClaim(segment),
+      inferColorPreference(segment),
+      inferHealthConstraint(segment),
+    ];
+    for (const inferred of inferredClaims) {
+      if (!inferred?.predicate || inferred.object === undefined) continue;
+      const key = inferred.predicate + ":" + canonicalJson(inferred.object);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push({
+        subject: "user:self",
+        ...inferred,
+        utteranceMode,
+        trustTier: 1,
+      });
+    }
   }
   return candidates;
 }
@@ -302,6 +310,50 @@ function inferControlledPersonalClaim(text: string): AssertionCandidate | null {
     return { predicate: "possession.vehicle", object: canonicalVehicle(vehicle[1]!) };
   }
 
+  return null;
+}
+
+function inferResidenceClaim(text: string): AssertionCandidate | null {
+  const current = text.match(/我[^。！？.!?]{0,80}?(?:现在|目前)常住\s*([^，。；;！？!?]{1,40})/u);
+  if (current) {
+    return { predicate: "residence.current", object: normalizeText(current[1]!) };
+  }
+
+  const direct = text.match(/我(?:现在|目前)?(?:住在|居住在|常住|现居)\s*([^，。；;！？!?]{1,40})/u);
+  if (direct) {
+    return { predicate: "residence.current", object: normalizeText(direct[1]!) };
+  }
+
+  const moved = text.match(/我(?:已经)?(?:从[^，。；;！？!?]{1,40})?搬到\s*([^，。；;！？!?]{1,40})/u);
+  if (moved) {
+    return { predicate: "residence.current", object: normalizeText(moved[1]!) };
+  }
+  return null;
+}
+
+function inferColorPreference(text: string): AssertionCandidate | null {
+  const chinese = text.match(/(?:^|[，。；;！？!?])\s*我最喜欢的颜色是\s*([^，。；;！？!?]{1,30})/u);
+  if (chinese) {
+    return { predicate: "preference.color", object: normalizeText(chinese[1]!) };
+  }
+
+  const english = text.match(/(?:^|[.!?;]\s*)my favou?rite colou?r is\s+([^,.!?;]{1,30})/i);
+  if (english) {
+    return { predicate: "preference.color", object: cleanCapturedValue(english[1]!) };
+  }
+  return null;
+}
+
+function inferHealthConstraint(text: string): AssertionCandidate | null {
+  const chinese = text.match(/(?:^|[，。；;！？!?])\s*我对\s*([^，。；;！？!?]{1,40}?)(?:严重|重度|高度)?过敏/u);
+  if (chinese) {
+    return { predicate: "constraint.health", object: [normalizeText(chinese[1]!)] };
+  }
+
+  const english = text.match(/(?:^|[.!?;]\s*)I(?:['’]m| am)?(?: severely| seriously)? allergic to\s+([^,.!?;]{1,50})/i);
+  if (english) {
+    return { predicate: "constraint.health", object: [cleanCapturedValue(english[1]!)] };
+  }
   return null;
 }
 

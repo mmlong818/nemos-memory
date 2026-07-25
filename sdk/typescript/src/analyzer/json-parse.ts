@@ -44,6 +44,14 @@ export interface ParsedCheck {
   stats?: VerificationStats;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isRawDerived(value: unknown): value is RawDerived {
+  return isRecord(value) && typeof value.content === "string" && value.content.trim().length > 0;
+}
+
 function stripFence(text: string): string {
   let s = text.trim();
   if (s.startsWith("```")) {
@@ -64,10 +72,10 @@ export function parseAnalyzeJson(raw: string): ParsedAnalyze {
       }\n片段: ${cleaned.slice(0, 240)}`,
     );
   }
-  const o = obj as { archival?: RawArchival; derived?: RawDerived[] };
+  const o = isRecord(obj) ? obj : {};
   return {
-    archival: o.archival || {},
-    derived: Array.isArray(o.derived) ? o.derived : [],
+    archival: isRecord(o.archival) ? o.archival as RawArchival : {},
+    derived: Array.isArray(o.derived) ? o.derived.filter(isRawDerived) : [],
   };
 }
 
@@ -83,10 +91,10 @@ export function parseCheckJson(raw: string): ParsedCheck {
       }\n片段: ${cleaned.slice(0, 240)}`,
     );
   }
-  const o = obj as { derived?: RawDerived[]; stats?: VerificationStats };
+  const o = isRecord(obj) ? obj : {};
   return {
-    derived: Array.isArray(o.derived) ? o.derived : [],
-    stats: o.stats,
+    derived: Array.isArray(o.derived) ? o.derived.filter(isRawDerived) : [],
+    stats: isRecord(o.stats) ? o.stats as unknown as VerificationStats : undefined,
   };
 }
 
