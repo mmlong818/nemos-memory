@@ -1,0 +1,29 @@
+# Dependencies and build output
+node_modules/
+dist/
+*.tgz
+
+# Local databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Logs and coverage
+*.log
+*.pid
+coverage/
+.nyc_output/
+
+# Python cache
+__pycache__/
+*.pyc
+.venv*/
+
+# IDE and OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
