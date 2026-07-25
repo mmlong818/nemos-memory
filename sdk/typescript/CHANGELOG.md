@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.5-alpha.2
+
+- Honored explicit recall result and token budgets instead of silently capping Top-K at 12.
+- Preserved Markdown table row/column relationships as deterministic retrieval facts.
+- Kept extracted fact language aligned with its source text and clarified user/reference ownership.
+- Allowed directly supported personal facts to remain queryable without weakening stale unstructured-trivia filtering.
+- Reweighted first-person factual recall so generic advice no longer crowds out the user's own events and tasks.
+- Recovered all three previously failing LongMemEval diagnostic cases in targeted reruns, with sufficient evidence packets in each case.
+
 ## 0.7.5-alpha.1
 
 - Anchored relative-time extraction to each source event and enabled historical recall for explicit past ranges.

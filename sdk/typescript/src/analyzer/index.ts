@@ -15,11 +15,13 @@ import type { AnalyzeOptions } from "./options.js";
 import { analyzeChunked } from "./chunked.js";
 import { analyzeMultiPerspective } from "./multi-perspective.js";
 import { analyzeOnce, analyzeWithVerification } from "./single-pass.js";
+import { appendStructuredFacts } from "./structured-facts.js";
 
 export type { AnalyzeOptions } from "./options.js";
 export { analyzeOnce, analyzeWithVerification } from "./single-pass.js";
 export { analyzeMultiPerspective } from "./multi-perspective.js";
 export { analyzeChunked } from "./chunked.js";
+export { appendStructuredFacts, extractMarkdownTableFacts } from "./structured-facts.js";
 export { buildArchival, buildDerived, buildDerivedMultiPerspective, applyExclude } from "./build-memory.js";
 export {
   parseAnalyzeJson,
@@ -59,15 +61,15 @@ export async function analyze(
   const chunks = chunkContent(trimmed, { maxChars, overlap });
   const useChunking = chunks.length > 1;
 
+  let result: IngestResult;
   if (useChunking) {
-    return analyzeChunked(trimmed, chunks, scope, llm, originAgent, options);
+    result = await analyzeChunked(trimmed, chunks, scope, llm, originAgent, options);
+  } else if (options.perspectives && options.perspectives.length > 0) {
+    result = await analyzeMultiPerspective(trimmed, scope, llm, originAgent, options);
+  } else if (options.doubleCheck) {
+    result = await analyzeWithVerification(trimmed, scope, llm, originAgent, options);
+  } else {
+    result = await analyzeOnce(trimmed, scope, llm, originAgent, options);
   }
-
-  if (options.perspectives && options.perspectives.length > 0) {
-    return analyzeMultiPerspective(trimmed, scope, llm, originAgent, options);
-  }
-  if (options.doubleCheck) {
-    return analyzeWithVerification(trimmed, scope, llm, originAgent, options);
-  }
-  return analyzeOnce(trimmed, scope, llm, originAgent, options);
+  return appendStructuredFacts(result, trimmed, scope, originAgent, profile);
 }

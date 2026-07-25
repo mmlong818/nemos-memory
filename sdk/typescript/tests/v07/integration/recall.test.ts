@@ -37,13 +37,20 @@ function cleanup(path: string): void {
 
 test("v0.7.2 query plan: current personal question maps to a deterministic claim", () => {
   const plan = planRecallQuery("我现在住在哪里？");
-  assert.equal(plan.algorithm_version, "0.7.5-alpha.1");
+  assert.equal(plan.algorithm_version, "0.7.5-alpha.2");
   assert.equal(plan.intent, "current_fact");
   assert.deepEqual(plan.subject_ids, ["user:self"]);
   assert.deepEqual(plan.predicates, ["residence.current"]);
   assert.equal(plan.claim_keys.length, 1);
   assert.ok(plan.max_candidates_per_channel <= 50);
-  assert.ok(plan.max_results <= 12);
+  assert.equal(plan.max_results, 12);
+});
+
+test("v0.7.5 query plan honors explicit result and token budgets", () => {
+  const plan = planRecallQuery("回顾相关事实", { maxResults: 20, maxTokens: 6000 });
+
+  assert.equal(plan.max_results, 20);
+  assert.equal(plan.max_tokens, 6000);
 });
 
 test("v0.7.4 query plan prioritizes health constraints over food preferences", () => {
@@ -513,6 +520,40 @@ test("v0.7.3 long-term admission hides stale unstructured trivia but keeps salie
   await nemos.close();
 });
 
+test("v0.7.5 supported personal facts survive stale-noise admission and ranking", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const source = await user.ingest("I need to pick up my navy blazer from the dry cleaner.", {
+    skipAnalysis: true,
+    contentDate: "2025-01-05",
+  });
+  const target = await user.write({
+    layer: "episodic",
+    type: "reference",
+    content: "The user still needs to pick up a navy blazer from the dry cleaner.",
+    archival_ref: source.archival.id,
+    eventAt: "2025-01-05",
+    specificity: "temporary",
+    source: { authoritative: false, origin: "test", chain_depth: 1 },
+  });
+  for (let index = 0; index < 25; index++) {
+    await user.write({
+      layer: "procedural",
+      type: "reference",
+      content: `General clothes pickup and return advice ${index}`,
+      source: { authoritative: false, origin: "test", chain_depth: 1 },
+    });
+  }
+
+  const packet = await user.recall("How many clothes do I need to pick up or return?", {
+    maxResults: 20,
+    now: "2026-07-25T00:00:00.000Z",
+  });
+
+  assert.deepEqual(packet.query_plan.subject_ids, ["user:self"]);
+  assert.ok(packet.items.some((item) => item.memory.id === target.id));
+  await nemos.close();
+});
 test("v0.7.5 explicit first-person health queries can retrieve sensitive derived facts", async () => {
   const nemos = createNemos();
   const user = nemos.forUser("alice");

@@ -112,8 +112,8 @@ export function planRecallQuery(
     include_recent:
       intent === "episode" && /最近|刚才|今天|昨天|上周|上个月|发生|recent|latest|happened/i.test(normalized),
     max_candidates_per_channel: clamp(options.maxCandidatesPerChannel ?? 50, 1, 50),
-    max_results: clamp(options.maxResults ?? options.topK ?? 12, 1, 12),
-    max_tokens: clamp(options.maxTokens ?? 1800, 128, 1800),
+    max_results: clamp(options.maxResults ?? options.topK ?? 12, 1, 50),
+    max_tokens: clamp(options.maxTokens ?? 1800, 128, 8192),
   };
 }
 
@@ -207,7 +207,7 @@ export class RecallService {
       accepted.push(related);
     }
 
-    let items = fuseChannels(accepted);
+    let items = fuseChannels(accepted, plan);
     const minScore = recallOptions.minScore ?? DEFAULT_MIN_SCORE;
     items = items.filter((item) => item.score >= minScore).slice(0, Math.min(200, plan.max_results * 4));
     items = collapseCurrentClaims(items, plan, recallOptions, rejected);
@@ -502,7 +502,7 @@ function layersForIntent(intent: RecallIntent): Layer[] {
 
 function inferSubjects(query: string): string[] {
   const explicit = [...query.matchAll(/subject:([\w:.-]+)/gi)].map((match) => match[1]!).filter(Boolean);
-  if (/我|我的|本人|自己|\bme\b|\bmy\b/i.test(query)) explicit.push("user:self");
+  if (/我|我的|本人|自己|\bi\b|\bme\b|\bmy\b/i.test(query)) explicit.push("user:self");
   return unique(explicit);
 }
 
@@ -634,7 +634,8 @@ function admissionFailure(memory: Memory, plan: QueryPlan, options: RecallOption
     plan.intent !== "current_fact" &&
     !plan.time_range &&
     !memory.claim_key &&
-    !isLongTermMemoryEligible(memory, options.now)
+    !isLongTermMemoryEligible(memory, options.now) &&
+    !isSupportedPersonalEvidence(memory, plan)
   ) {
     return "low_long_term_salience";
   }
@@ -682,6 +683,29 @@ function evidenceAdmissionFailure(memory: Memory, plan: QueryPlan, options: Reca
   if (plan.time_range?.from && timestamp < plan.time_range.from) return "before_time_range";
   if (plan.time_range?.to && timestamp > plan.time_range.to) return "after_time_range";
   return null;
+}
+
+function isSupportedPersonalEvidence(memory: Memory, plan: QueryPlan): boolean {
+  if (!isPersonalFactQuery(plan) || !memoryRepresentsUser(memory)) return false;
+  return memory.evidence_coverage === "supported" || memory.evidence_coverage === "corroborated";
+}
+
+function isPersonalFactQuery(plan: QueryPlan): boolean {
+  return plan.intent !== "procedure" && plan.subject_ids.includes("user:self");
+}
+
+function personalFactWeight(memory: Memory, plan: QueryPlan): number {
+  if (!isPersonalFactQuery(plan)) return 1;
+  if (memoryRepresentsUser(memory)) return 1.35;
+  if (memory.type === "reference") return 0.7;
+  return 1;
+}
+
+function memoryRepresentsUser(memory: Memory): boolean {
+  if (memory.utterance_mode && memory.utterance_mode !== "literal") return false;
+  if (memory.type === "user") return true;
+  if (memory.layer !== "episodic" && memory.layer !== "personal_semantic") return false;
+  return /(?:\bthe user\b|\buser\b|用户)/i.test(memory.content);
 }
 
 function isLongTermMemoryEligible(memory: Memory, nowValue?: string): boolean {
@@ -849,13 +873,13 @@ function containsPersistenceInstruction(content: string): boolean {
   return /ignore (all |the )?(previous|prior) instructions|system prompt|永久记住|写入长期记忆|忽略.{0,8}指令|必须永远遵守/i.test(content);
 }
 
-function fuseChannels(channels: ChannelResult[]): RecallItem[] {
+function fuseChannels(channels: ChannelResult[], plan: QueryPlan): RecallItem[] {
   const fused = new Map<string, RecallItem>();
   for (const channel of channels) {
     const weight = CHANNEL_WEIGHTS[channel.channel];
     channel.memories.forEach((memory, index) => {
       const rank = index + 1;
-      const contribution = weight / (RRF_K + rank);
+      const contribution = weight * personalFactWeight(memory, plan) / (RRF_K + rank);
       const existing = fused.get(memory.id) ?? { memory, score: 0, reasons: [] };
       existing.score += contribution;
       existing.reasons.push({ channel: channel.channel, rank, contribution: round(contribution) });
