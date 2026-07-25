@@ -56,37 +56,28 @@ A new fact value does not erase the old record. Nemos Memory retains history and
 
 ## Comparison with other open-source projects
 
-These projects do not solve exactly the same problem:
+The projects have different goals. Nemos Memory is an embedded, local-first memory kernel; [Mem0](https://github.com/mem0ai/mem0) emphasizes broad integrations and a service ecosystem; [LangMem](https://github.com/langchain-ai/langmem) targets LangGraph agents; and [Graphiti](https://github.com/getzep/graphiti) models changing relationships as a temporal knowledge graph.
 
-| Project | Primary focus | Best fit |
-|---|---|---|
-| **Nemos Memory** | Embedded, local-first memory kernel focused on fact versions, provenance, and controlled recall | Local data ownership, Chinese personal memory, and evolving facts |
-| [Mem0](https://github.com/mem0ai/mem0) | General agent memory layer with broad SDK, integration, and hosted-service coverage | Mature integrations and cross-platform adoption |
-| [LangMem](https://github.com/langchain-ai/langmem) | Agent memory management toolkit closely integrated with LangGraph storage | LangGraph applications using hot-path and background memory management |
-| [Graphiti](https://github.com/getzep/graphiti) | Temporal context graph for changing relationships and historical queries | Relationship-heavy systems requiring graph traversal and custom ontologies |
+### July 25, 2026 head-to-head run
 
-### Current-version results
+This run started from a new Chinese `core-v2` suite with 24 scenarios, 37 events, and 41 queries. All four products received the same inputs, event times, queries, and Top-5 limit in one run, using `gpt-5.6-terra` and `text-embedding-3-small`. Frozen answer aliases provided deterministic scoring; no LLM judge was used.
 
-On July 25, 2026, the current build completed five consecutive runs of the Chinese `core-v1` suite. It contains 10 scenarios and 12 queries per run, scored with frozen answer aliases and no LLM judge.
+| Product | Version | Recall@5 | MRR | Top-1 | Top-1 safety | Strict no-pollution | Provenance visible | Fact time visible | Mean ingest | Mean query |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| **Nemos Memory** | **0.7.4-alpha.1** | 87.8% | 0.841 | 80.5% | 85.7% | **92.9%** | **87.8%** | **87.8%** | 5472 ms | **461 ms** |
+| Mem0 OSS | 2.0.14 | **97.6%** | 0.951 | 92.7% | **100.0%** | 85.7% | 0.0% | 0.0% | **4067 ms** | 680 ms |
+| LangMem | 0.0.30 | **97.6%** | **0.976** | **97.6%** | **100.0%** | **92.9%** | 0.0% | 0.0% | 4292 ms | 533 ms |
+| Graphiti OSS | 0.29.2 | 73.2% | 0.689 | 65.9% | 90.5% | 78.6% | 73.2% | 73.2% | 13154 ms | 578 ms |
 
-| Product | Version and run | Recall@5 | MRR | Top-1 | Conflict safety | Provenance visible | Fact time visible | Mean query |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| **Nemos Memory** | **0.7.4-alpha.1 latest performance run** | **100.0%** | **1.000** | **100.0%** | **100.0%** | 91.7% | **100.0%** | **345 ms** |
+`Top-1 safety` checks whether the first result is a known incorrect fact. `Strict no-pollution` requires the complete Top-5 to exclude stale values, role-play, and third-party contamination. A 0% provenance or fact-time score only means those fields were not exposed by the product's native search result through the adapter used in this run; it does not prove that the product has no related internal capability.
 
-Across the five stability runs, Recall@5, MRR, Top-1, conflict safety, and fact-time visibility remained at 100%. The optimized performance run reduced mean query time from the five-run baseline of 1019 ms to 345 ms, while exact structured-fact queries took roughly 2 to 6 ms. Provenance visibility varied from 75.0% to 91.7%, so its presentation still needs to be made more consistent.
+### Current assessment
 
-### Historical head-to-head baseline
+Nemos' demonstrated strengths are query latency, embedded local operation, pollution control, and visible provenance and fact time on successful results. It passed every constraint, attribution-safety, negation, user-isolation, plan-change, multilingual, routine, and procedure query, with no runtime errors.
 
-Before those fixes, four fixed product versions received the same inputs, order, language model, and embedding model in one shared black-box run. Every scenario started with empty storage and each query returned at most five results.
+The gaps are equally clear: Nemos still trails Mem0 and LangMem on Recall@5 and Top-1. Its five misses came from four root causes: explicit-year queries did not automatically enable historical recall; office location was normalized as residence; dense text extraction omitted passport and emergency-contact facts; and relative dates were not anchored to the source event time. One long-gap fact update was found in Top-5, but the stale camera still ranked first.
 
-| Product | Version tested then | Recall@5 | MRR | Top-1 | Conflict safety | Provenance visible | Fact time visible | Mean query |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Nemos Memory | 0.7.4-alpha.1 pre-fix baseline | 91.7% | 0.917 | 91.7% | 91.7% | 75.0% | **100.0%** | 1246 ms |
-| Mem0 OSS | 2.0.13 | **100.0%** | 0.958 | 91.7% | **100.0%** | 0.0% | 0.0% | 660 ms |
-| LangMem | 0.0.30 | **100.0%** | **1.000** | **100.0%** | **100.0%** | 0.0% | 0.0% | **567 ms** |
-| Graphiti OSS | 0.29.2 | 58.3% | 0.500 | 41.7% | 91.7% | 66.7% | 66.7% | 600 ms |
-
-The historical table explains where the fixed problems were found. It does not represent the current Nemos Memory score and is not a general leaderboard. The fixed build has not yet been rerun head-to-head with the other products, and the suite contains only 12 queries. The current evidence shows stable basic recall and fact updates on this small regression suite, with temporal and provenance modeling as explicit strengths. Larger Chinese datasets, deletion propagation, long-term decay, and cost evaluation remain future work.
+This is not a universal leaderboard. The suite is still limited and does not yet cover deletion propagation, very-long-term decay, concurrent writes, or API cost. Nemos used single-pass extraction with double checking and automatic linking disabled, so it did not gain an advantage from extra model calls.
 
 ## Install
 
