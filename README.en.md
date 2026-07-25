@@ -65,20 +65,28 @@ These projects do not solve exactly the same problem:
 | [LangMem](https://github.com/langchain-ai/langmem) | Agent memory management toolkit closely integrated with LangGraph storage | LangGraph applications using hot-path and background memory management |
 | [Graphiti](https://github.com/getzep/graphiti) | Temporal context graph for changing relationships and historical queries | Relationship-heavy systems requiring graph traversal and custom ontologies |
 
-### Shared black-box run
+### Current-version results
 
-On July 25, 2026, fixed product versions received the same 10 Chinese scenarios, 12 queries, event order, language model, and embedding model. Frozen answer aliases provided deterministic scoring without an LLM judge. Every scenario started with empty storage and each query returned at most five results.
+On July 25, 2026, the current build completed five consecutive runs of the Chinese `core-v1` suite. It contains 10 scenarios and 12 queries per run, scored with frozen answer aliases and no LLM judge.
 
-| Product | Tested version | Recall@5 | MRR | Top-1 | Conflict safety | Provenance visible | Fact time visible | Mean query |
+| Product | Version and run | Recall@5 | MRR | Top-1 | Conflict safety | Provenance visible | Fact time visible | Mean query |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Nemos Memory | 0.7.4-alpha.1 baseline | 91.7% | 0.917 | 91.7% | 91.7% | 75.0% | **100.0%** | 1246 ms |
+| **Nemos Memory** | **0.7.4-alpha.1 latest performance run** | **100.0%** | **1.000** | **100.0%** | **100.0%** | 91.7% | **100.0%** | **345 ms** |
+
+Across the five stability runs, Recall@5, MRR, Top-1, conflict safety, and fact-time visibility remained at 100%. The optimized performance run reduced mean query time from the five-run baseline of 1019 ms to 345 ms, while exact structured-fact queries took roughly 2 to 6 ms. Provenance visibility varied from 75.0% to 91.7%, so its presentation still needs to be made more consistent.
+
+### Historical head-to-head baseline
+
+Before those fixes, four fixed product versions received the same inputs, order, language model, and embedding model in one shared black-box run. Every scenario started with empty storage and each query returned at most five results.
+
+| Product | Version tested then | Recall@5 | MRR | Top-1 | Conflict safety | Provenance visible | Fact time visible | Mean query |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Nemos Memory | 0.7.4-alpha.1 pre-fix baseline | 91.7% | 0.917 | 91.7% | 91.7% | 75.0% | **100.0%** | 1246 ms |
 | Mem0 OSS | 2.0.13 | **100.0%** | 0.958 | 91.7% | **100.0%** | 0.0% | 0.0% | 660 ms |
 | LangMem | 0.0.30 | **100.0%** | **1.000** | **100.0%** | **100.0%** | 0.0% | 0.0% | **567 ms** |
 | Graphiti OSS | 0.29.2 | 58.3% | 0.500 | 41.7% | 91.7% | 66.7% | 66.7% | 600 ms |
 
-The run exposed a fact-update defect and excessive query latency in Nemos Memory. After fixes, Nemos completed five consecutive runs of the same suite with 100% Recall@5, MRR, Top-1, conflict safety, and fact-time visibility. A later performance run averaged 345 ms per query, while exact structured-fact queries took roughly 2 to 6 ms.
-
-These numbers are engineering diagnostics, not a general leaderboard. The suite contains only 12 queries; the fixed Nemos build has not yet been rerun head-to-head with the other products, and provenance visibility still varies. The current evidence shows stable basic recall and fact updates on this small regression suite, with temporal and provenance modeling as explicit strengths. Larger Chinese datasets, deletion propagation, long-term decay, and cost evaluation remain future work.
+The historical table explains where the fixed problems were found. It does not represent the current Nemos Memory score and is not a general leaderboard. The fixed build has not yet been rerun head-to-head with the other products, and the suite contains only 12 queries. The current evidence shows stable basic recall and fact updates on this small regression suite, with temporal and provenance modeling as explicit strengths. Larger Chinese datasets, deletion propagation, long-term decay, and cost evaluation remain future work.
 
 ## Install
 
