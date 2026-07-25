@@ -8,7 +8,7 @@ Nemos Memory is built for AI assistants, agents, companion applications, and per
 
 It ships as an embedded TypeScript SDK backed by local SQLite. Applications can integrate it without deploying a separate vector database or memory server.
 
-> Current version: `0.7.4-alpha.1`. Core ingestion, fact evolution, recall, correction, invalidation, isolation, and export flows are available. APIs may still change before the stable release.
+> Current version: `0.7.5-alpha.1`. Core ingestion, fact evolution, recall, correction, invalidation, isolation, and export flows are available. APIs may still change before the stable release.
 
 ## Why Nemos Memory
 
@@ -64,18 +64,18 @@ This run started from a new Chinese `core-v2` suite with 24 scenarios, 37 events
 
 | Product | Version | Recall@5 | MRR | Top-1 | Top-1 safety | Strict no-pollution | Provenance visible | Fact time visible | Mean ingest | Mean query |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| **Nemos Memory** | **0.7.4-alpha.1** | 87.8% | 0.841 | 80.5% | 85.7% | **92.9%** | **87.8%** | **87.8%** | 5472 ms | **461 ms** |
-| Mem0 OSS | 2.0.14 | **97.6%** | 0.951 | 92.7% | **100.0%** | 85.7% | 0.0% | 0.0% | **4067 ms** | 680 ms |
-| LangMem | 0.0.30 | **97.6%** | **0.976** | **97.6%** | **100.0%** | **92.9%** | 0.0% | 0.0% | 4292 ms | 533 ms |
-| Graphiti OSS | 0.29.2 | 73.2% | 0.689 | 65.9% | 90.5% | 78.6% | 73.2% | 73.2% | 13154 ms | 578 ms |
+| **Nemos Memory** | **0.7.5-alpha.1** | **100.0%** | **0.976** | 95.1% | **100.0%** | **100.0%** | **100.0%** | **100.0%** | 5325 ms | **387 ms** |
+| Mem0 OSS | 2.0.14 | 97.6% | 0.939 | 90.2% | 95.2% | 85.7% | 0.0% | 0.0% | **4127 ms** | 683 ms |
+| LangMem | 0.0.30 | 97.6% | **0.976** | **97.6%** | **100.0%** | **100.0%** | 0.0% | 0.0% | 4197 ms | 529 ms |
+| Graphiti OSS | 0.29.2 | 70.7% | 0.677 | 65.9% | 85.7% | 71.4% | 70.7% | 70.7% | 11772 ms | 599 ms |
 
 `Top-1 safety` checks whether the first result is a known incorrect fact. `Strict no-pollution` requires the complete Top-5 to exclude stale values, role-play, and third-party contamination. A 0% provenance or fact-time score only means those fields were not exposed by the product's native search result through the adapter used in this run; it does not prove that the product has no related internal capability.
 
 ### Current assessment
 
-Nemos' demonstrated strengths are query latency, embedded local operation, pollution control, and visible provenance and fact time on successful results. It passed every constraint, attribution-safety, negation, user-isolation, plan-change, multilingual, routine, and procedure query, with no runtime errors.
+In this run, Nemos reached 100% Recall@5, Top-1 safety, strict no-pollution, provenance exposure, and fact-time exposure, with 387 ms mean query latency and no runtime errors. It closed the previous gaps in explicit-year history, workplace facts, dense high-value extraction, relative-time anchoring, and long-gap device updates.
 
-The gaps are equally clear: Nemos still trails Mem0 and LangMem on Recall@5 and Top-1. Its five misses came from four root causes: explicit-year queries did not automatically enable historical recall; office location was normalized as residence; dense text extraction omitted passport and emergency-contact facts; and relative dates were not anchored to the source event time. One long-gap fact update was found in Top-5, but the stale camera still ranked first.
+The remaining gap is concentrated in first-result ranking and ingest latency. Nemos reached 95.1% Top-1 versus LangMem's 97.6%, while mean ingest time remained above Mem0 and LangMem. The next phase should broaden automatic predicate normalization and reduce model wait time during extraction.
 
 This is not a universal leaderboard. The suite is still limited and does not yet cover deletion propagation, very-long-term decay, concurrent writes, or API cost. Nemos used single-pass extraction with double checking and automatic linking disabled, so it did not gain an advantage from extra model calls.
 

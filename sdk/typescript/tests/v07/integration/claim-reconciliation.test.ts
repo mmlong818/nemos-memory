@@ -324,6 +324,59 @@ test("v0.7.4 deterministic Chinese residence updates do not depend on LLM claim 
   await nemos.close();
 });
 
+test("v0.7.5 deterministic workplace claims respect event time when extraction finishes out of order", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const currentResult = await user.ingest("我现在的办公地点是成都高新区。", {
+    contentDate: "2026-07-20T09:00:00+08:00",
+  });
+  const oldResult = await user.ingest("年初时我的办公室还在北京朝阳区。", {
+    contentDate: "2026-01-05T09:00:00+08:00",
+  });
+  const current = currentResult.derived.find((memory) => memory.predicate === "workplace.location");
+  const old = oldResult.derived.find((memory) => memory.predicate === "workplace.location");
+
+  assert.equal(current?.object_json, "成都高新区");
+  assert.equal(old?.object_json, "北京朝阳区");
+  assert.equal(nemos.raw().storage.findById("default", "alice", old!.id)?.belief_state, "superseded");
+  const packet = await user.recall("我现在在哪里办公？");
+  assert.equal(packet.items[0]?.memory.object_json, "成都高新区");
+  await nemos.close();
+});
+
+test("v0.7.5 deterministic extraction keeps high-value facts from dense text", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const result = await user.ingest("今天开会很吵，投影仪还坏了。顺便记一下真正有用的信息：我的护照将在2028年4月到期；紧急联系人是姐姐林岚；午饭的汤有点咸。", {
+    contentDate: "2026-07-18T14:00:00+08:00",
+  });
+
+  assert.equal(result.derived.find((memory) => memory.predicate === "document.passport_expiry")?.object_json, "2028年4月");
+  assert.equal(result.derived.find((memory) => memory.predicate === "contact.emergency")?.object_json, "姐姐林岚");
+  assert.equal((await user.recall("我的护照什么时候到期？")).items[0]?.memory.object_json, "2028年4月");
+  assert.equal((await user.recall("我的紧急联系人是谁？")).items[0]?.memory.object_json, "姐姐林岚");
+  await nemos.close();
+});
+
+test("v0.7.5 deterministic camera claim keeps the current model above legacy text", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const oldResult = await user.ingest("我以前使用佳能相机。", {
+    contentDate: "2022-03-01T09:00:00+08:00",
+  });
+  const currentResult = await user.ingest("四年后我已经换成富士相机，现在主力机是富士X-T6。", {
+    contentDate: "2026-06-01T09:00:00+08:00",
+  });
+  const old = oldResult.derived.find((memory) => memory.predicate === "device.camera.primary");
+  const current = currentResult.derived.find((memory) => memory.predicate === "device.camera.primary");
+
+  assert.equal(old?.object_json, "佳能相机");
+  assert.equal(current?.object_json, "富士X-T6");
+  assert.equal(nemos.raw().storage.findById("default", "alice", old!.id)?.belief_state, "superseded");
+  const packet = await user.recall("我现在使用的主力相机是什么？");
+  assert.equal(packet.items[0]?.memory.object_json, "富士X-T6");
+  await nemos.close();
+});
 test("v0.7.4 deterministic color preferences remain isolated by user", async () => {
   const nemos = createNemos();
   const alice = await nemos.forUser("alice").ingest("我最喜欢的颜色是绿色。");

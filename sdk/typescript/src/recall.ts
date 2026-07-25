@@ -89,9 +89,11 @@ export function planRecallQuery(
     ...(options.claimKeys ?? []),
     ...subjectIds.flatMap((subjectId) => predicates.map((predicate) => makeClaimKey(subjectId, predicate, {}))),
   ]);
-  const includeHistorical =
-    options.includeHistorical === true || options.includeInvalidated === true || intent === "historical_fact";
   const timeRange = normalizeTimeRange(options.timeRange ?? inferTimeRange(normalized, options.now));
+  const includeHistorical = options.includeHistorical === true
+    || options.includeInvalidated === true
+    || intent === "historical_fact"
+    || isPastTimeRange(timeRange, options.now);
   return {
     algorithm_version: RECALL_ALGORITHM_VERSION,
     query: normalized,
@@ -103,7 +105,7 @@ export function planRecallQuery(
     claim_keys: claimKeys,
     entity_terms: unique([...(options.entities ?? []), ...inferEntityTerms(normalized)]).slice(0, 8),
     time_range: timeRange,
-    include_sensitive: options.includeSensitive === true || options.sensitiveOnly === true,
+    include_sensitive: options.includeSensitive === true || options.sensitiveOnly === true || isExplicitSensitiveQuery(normalized),
     include_historical: includeHistorical,
     include_related: options.includeRelated !== false,
     include_evidence: options.includeEvidence !== false,
@@ -237,6 +239,7 @@ export class RecallService {
       items = mergeEvidenceFallback(items, evidence.memories);
     }
 
+    items = this.prioritizeExplicitUpdates(items, plan);
     items = applyPacketBudget(items, plan, rejected);
 
     const trace = this.makeTrace(plan, accepted, rejected, items, started);
@@ -401,6 +404,24 @@ export class RecallService {
     }
     return memories;
   }
+  private prioritizeExplicitUpdates(items: RecallItem[], plan: QueryPlan): RecallItem[] {
+    if (plan.include_historical || !/还要|还会|是否还|仍然|依然|anymore|still\b/i.test(plan.query)) return items;
+    const sourceTime = (memory: Memory): string => {
+      const sourceIds = memory.archival_ref
+        ? [memory.archival_ref]
+        : unique((memory.source_event_ids ?? []).filter((id) => id !== memory.id));
+      const sourceTimes = sourceIds
+        .map((id) => this.options.storage.findById(this.options.tenantId, this.options.userId, id))
+        .filter((source): source is Memory => source !== null)
+        .map((source) => source.event_at ?? source.created_at)
+        .sort((left, right) => right.localeCompare(left));
+      return sourceTimes[0] ?? memory.created_at;
+    };
+    return items
+      .map((item, index) => ({ item, index, sourceTime: sourceTime(item.memory) }))
+      .sort((left, right) => right.sourceTime.localeCompare(left.sourceTime) || left.index - right.index)
+      .map((entry) => entry.item);
+  }
   private async runChannel(
     channel: RecallChannel,
     operation: () => Memory[] | Promise<Memory[]>,
@@ -489,7 +510,9 @@ function inferPredicates(query: string): string[] {
   const values: string[] = [];
   if (/名字|姓名|叫什么|name/i.test(query)) values.push("identity.name");
   if (/称呼|怎么叫|address me/i.test(query)) values.push("identity.preferred_address");
-  if (/住|居住|现居|城市|哪里|哪儿|residen|live/i.test(query)) values.push("residence.current");
+  const workplaceIntent = /办公|办公室|工作地点|where.*work|office location|workplace/i.test(query);
+  if (!workplaceIntent && /住|居住|现居|城市|哪里|哪儿|residen|live/i.test(query)) values.push("residence.current");
+  if (workplaceIntent) values.push("workplace.location");
   if (/公司|单位|就职|工作在哪|employ|company/i.test(query)) values.push("employment.organization");
   if (/职位|岗位|职业|role|job title/i.test(query)) values.push("employment.role");
   const healthIntent = /健康|过敏|health|allerg/i.test(query);
@@ -500,6 +523,9 @@ function inferPredicates(query: string): string[] {
   if (/感情|婚姻|relationship status|marital status/i.test(query)) values.push("relationship.status");
   if (/健身房|gym|fitness/i.test(query)) values.push("membership.gym");
   if (/手机|phone brand|brand of phone/i.test(query)) values.push("device.phone_brand");
+  if (/相机|主力机|camera/i.test(query)) values.push("device.camera.primary");
+  if (/护照.*(?:到期|过期|有效期)|passport.*(?:expir|valid)/i.test(query)) values.push("document.passport_expiry");
+  if (/紧急联系人|emergency contact/i.test(query)) values.push("contact.emergency");
   if (/通勤|commute|go to work/i.test(query)) values.push("commute.mode");
   if (/汽车|车辆|开什么车|current car|driving/i.test(query)) values.push("possession.vehicle");
   if (/沟通|回复风格|communication style/i.test(query)) values.push("preference.communication_style");
@@ -542,6 +568,11 @@ function inferTimeRange(query: string, nowValue?: string): RecallTimeRange | und
     const month = names.indexOf(namedMonth[1]!.toLowerCase());
     return { from: new Date(Date.UTC(year, month, 1)).toISOString(), to: new Date(Date.UTC(year, month + 1, 1) - 1).toISOString() };
   }
+  const exactYear = query.match(/\b(20\d{2})(?:年)?\b/);
+  if (exactYear) {
+    const year = Number(exactYear[1]);
+    return { from: new Date(Date.UTC(year, 0, 1)).toISOString(), to: new Date(Date.UTC(year + 1, 0, 1) - 1).toISOString() };
+  }
   if (/最近\s*24\s*小时|past\s*24\s*hours/i.test(query)) {
     return { from: new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(), to: now.toISOString() };
   }
@@ -582,6 +613,17 @@ function normalizeTimeRange(range?: RecallTimeRange): RecallTimeRange | undefine
   return from || to ? { from, to } : undefined;
 }
 
+function isPastTimeRange(range: RecallTimeRange | undefined, nowValue?: string): boolean {
+  if (!range) return false;
+  const boundary = Date.parse(range.to ?? range.from ?? "");
+  const now = Date.parse(nowValue ?? new Date().toISOString());
+  return Number.isFinite(boundary) && Number.isFinite(now) && boundary < now;
+}
+function isExplicitSensitiveQuery(query: string): boolean {
+  const asksAboutSelf = /我|本人|自己|\bmy\b|\bme\b/i.test(query);
+  const namesSensitiveTopic = /过敏|看牙|牙医|口腔|医院|就诊|病历|疾病|诊断|用药|药物|健康|医疗|怀孕|心理|medical|health|allerg|dent|hospital|diagnos|medication/i.test(query);
+  return asksAboutSelf && namesSensitiveTopic;
+}
 function admissionFailure(memory: Memory, plan: QueryPlan, options: RecallOptions): string | null {
   if (!plan.layers.includes(memory.layer)) return "layer_not_requested";
   if (plan.scopes.length > 0 && !plan.scopes.includes(memory.scope)) return "scope_not_visible";

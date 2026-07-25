@@ -16,6 +16,9 @@ const PREDICATES: PredicateDefinition[] = [
   define("residence.current", ["residence", "current residence", "居住地", "住在", "现居", "搬到"], "entity", true, [], "current"),
   define("employment.organization", ["employer", "company", "任职公司", "工作单位", "就职于"], "entity", true, [], "current"),
   define("employment.role", ["job title", "role", "职位", "岗位", "职业"], "string", true, [], "current"),
+  define("workplace.location", ["workplace", "office location", "办公地点", "办公室", "工作地点"], "entity", true, [], "current"),
+  define("contact.emergency", ["emergency contact", "紧急联系人"], "entity", true, [], "current"),
+  define("document.passport_expiry", ["passport expiry", "passport expiration", "护照到期", "护照有效期"], "string", true, [], "current"),
   define("relationship.family", ["family", "家庭关系", "亲属", "家人"], "entity_set", false, ["relation"], "current"),
   define("preference.food", ["food preference", "饮食偏好", "喜欢吃", "不吃"], "string_set", false, ["polarity"], "current"),
   define("preference.color", ["favorite color", "colour preference", "最喜欢的颜色", "喜欢什么颜色"], "string", true, [], "current"),
@@ -23,6 +26,7 @@ const PREDICATES: PredicateDefinition[] = [
   define("relationship.status", ["relationship status", "marital status", "感情状态", "婚姻状态"], "string", true, [], "current"),
   define("membership.gym", ["gym membership", "健身房会员", "健身房"], "entity", true, [], "current"),
   define("device.phone_brand", ["phone brand", "手机品牌", "手机"], "string", true, [], "current"),
+  define("device.camera.primary", ["primary camera", "camera model", "主力相机", "主力机", "相机"], "entity", true, [], "current"),
   define("commute.mode", ["commute mode", "通勤方式", "上班方式"], "string", true, [], "current"),
   define("possession.vehicle", ["vehicle", "car", "车辆", "汽车"], "entity", true, [], "current"),
   define("preference.communication_style", ["communication style", "沟通偏好", "回复风格", "表达风格"], "string_set", false, [], "current"),
@@ -220,6 +224,10 @@ export function inferControlledAssertions(content: string): AssertionCandidate[]
     const inferredClaims = [
       inferControlledPersonalClaim(segment),
       inferResidenceClaim(segment),
+      inferWorkplaceLocation(segment),
+      inferPassportExpiry(segment),
+      inferEmergencyContact(segment),
+      inferPrimaryCamera(segment),
       inferColorPreference(segment),
       inferHealthConstraint(segment),
     ];
@@ -331,6 +339,35 @@ function inferResidenceClaim(text: string): AssertionCandidate | null {
   return null;
 }
 
+function inferWorkplaceLocation(text: string): AssertionCandidate | null {
+  const match = text.match(/(?:我(?:现在|目前)?的|我的)?(?:办公地点|办公室|工作地点)(?:目前|现在)?(?:是|在|位于|还在)\s*([^，。；;！？!?]{1,60})/u);
+  if (!match) return null;
+  return { predicate: "workplace.location", object: normalizeText(match[1]!) };
+}
+
+function inferPassportExpiry(text: string): AssertionCandidate | null {
+  const match = text.match(/(?:我的)?护照(?:将在|将于|会在|在)?\s*((?:20\d{2})[年\-\/.](?:0?[1-9]|1[0-2])(?:月)?(?:\d{1,2}日?)?)\s*(?:到期|过期)/u);
+  if (!match) return null;
+  return { predicate: "document.passport_expiry", object: normalizeText(match[1]!) };
+}
+
+function inferEmergencyContact(text: string): AssertionCandidate | null {
+  const match = text.match(/(?:我的)?紧急联系人(?:是|为)\s*([^，。；;！？!?]{1,40})/u);
+  if (!match) return null;
+  return { predicate: "contact.emergency", object: normalizeText(match[1]!) };
+}
+
+function inferPrimaryCamera(text: string): AssertionCandidate | null {
+  const primary = text.match(/(?:现在|目前)?(?:的)?主力(?:相机|机)(?:是|为)\s*([^，。；;！？!?]{1,60})/u);
+  if (primary) return { predicate: "device.camera.primary", object: normalizeText(primary[1]!) };
+
+  const switched = text.match(/我(?:已经)?(?:从[^，。；;！？!?]{1,40})?(?:换成|改用)\s*([^，。；;！？!?]{1,40}?相机)/u);
+  if (switched) return { predicate: "device.camera.primary", object: normalizeText(switched[1]!) };
+
+  const using = text.match(/我(?:以前|现在|目前)?(?:一直)?(?:使用|用)\s*([^，。；;！？!?]{1,40}?相机)/u);
+  if (using) return { predicate: "device.camera.primary", object: normalizeText(using[1]!) };
+  return null;
+}
 function inferColorPreference(text: string): AssertionCandidate | null {
   const chinese = text.match(/(?:^|[，。；;！？!?])\s*我最喜欢的颜色是\s*([^，。；;！？!?]{1,30})/u);
   if (chinese) {

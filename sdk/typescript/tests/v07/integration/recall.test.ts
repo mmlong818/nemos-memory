@@ -37,7 +37,7 @@ function cleanup(path: string): void {
 
 test("v0.7.2 query plan: current personal question maps to a deterministic claim", () => {
   const plan = planRecallQuery("我现在住在哪里？");
-  assert.equal(plan.algorithm_version, "0.7.4-alpha.1");
+  assert.equal(plan.algorithm_version, "0.7.5-alpha.1");
   assert.equal(plan.intent, "current_fact");
   assert.deepEqual(plan.subject_ids, ["user:self"]);
   assert.deepEqual(plan.predicates, ["residence.current"]);
@@ -54,6 +54,60 @@ test("v0.7.4 query plan prioritizes health constraints over food preferences", (
   assert.deepEqual(color.predicates, ["preference.color"]);
 });
 
+test("v0.7.5 an explicit past year automatically enables historical recall", async () => {
+  const plan = planRecallQuery("2025年我住在哪座城市？", { now: "2026-07-25T00:00:00.000Z" });
+  assert.equal(plan.include_historical, true);
+  assert.deepEqual(plan.time_range, {
+    from: "2025-01-01T00:00:00.000Z",
+    to: "2025-12-31T23:59:59.999Z",
+  });
+
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const historical = await user.write(fact("我在2025年住在福州", "福州", "2025-05-01T09:00:00+08:00"));
+  await user.write(fact("我现在住在厦门", "厦门", "2026-07-10T09:00:00+08:00"));
+  const packet = await user.recall("2025年我住在哪座城市？", { now: "2026-07-25T00:00:00.000Z" });
+
+  assert.equal(packet.items[0]?.memory.id, historical.id);
+  assert.equal(packet.items[0]?.memory.object_json, "福州");
+  await nemos.close();
+});
+
+test("v0.7.5 extraction receives event time and deterministic relative-date resolution", async () => {
+  let captured = "";
+  const nemos = new Nemos({
+    storage: { type: "memory" },
+    llm: {
+      provider: "custom",
+      name: "temporal-probe",
+      chat: async (_system, user) => {
+        captured = user;
+        return JSON.stringify({
+          archival: { arousal: { value: 0, signal_sources: [] }, surprise: { value: 0, basis: "test" } },
+          derived: [{
+            layer: "episodic",
+            content: "2026年7月21日下午3点去仁和口腔看牙",
+            type: "user",
+            source: { authoritative: false, origin: "llm-extract", chain_depth: 1 },
+            arousal: { value: 0, signal_sources: [] },
+            surprise: { value: 0, basis: "test" },
+            event_at: "2026-07-21T15:00:00+08:00",
+          }],
+        });
+      },
+    },
+    features: { doubleCheck: false, autoLinking: false },
+    worker: { manualWorker: true },
+  });
+  const result = await nemos.forUser("alice").ingest("明天下午3点去仁和口腔看牙。", {
+    contentDate: "2026-07-20T09:00:00+08:00",
+  });
+
+  assert.match(captured, /event_time: 2026-07-20T09:00:00\+08:00/);
+  assert.match(captured, /relative_time_resolution: 明天=2026-07-21/);
+  assert.equal(result.derived[0]?.event_at, "2026-07-21T15:00:00+08:00");
+  await nemos.close();
+});
 test("v0.7.4 exact current claims skip remote query embedding", async () => {
   let embeddingCalls = 0;
   const nemos = new Nemos({
@@ -456,5 +510,56 @@ test("v0.7.3 long-term admission hides stale unstructured trivia but keeps salie
   assert.ok(packet.items.some((item) => item.memory.id === salient.id));
   const current = await user.recall("我现在住在哪里？", { now: "2026-07-25T00:00:00.000Z" });
   assert.ok(current.items.some((item) => item.memory.id === structured.id));
+  await nemos.close();
+});
+
+test("v0.7.5 explicit first-person health queries can retrieve sensitive derived facts", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const appointment = await user.write({
+    layer: "episodic",
+    content: "我2026年7月21日下午3点去仁和口腔看牙",
+    sensitive: true,
+    source: { authoritative: false, origin: "test", chain_depth: 1 },
+    eventAt: "2026-07-21T15:00:00+08:00",
+  });
+
+  const explicit = await user.recall("我2026年7月21日下午3点去仁和口腔看牙");
+  assert.equal(explicit.items[0]?.memory.id, appointment.id);
+  assert.equal(explicit.query_plan.include_sensitive, true);
+
+  const broad = await user.recall("最近有哪些安排？");
+  assert.ok(!broad.items.some((item) => item.memory.id === appointment.id));
+  await nemos.close();
+});
+test("v0.7.5 explicit update questions prioritize the latest source event over a future plan date", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const plannedSource = await user.ingest("我订了7月30日去杭州的高铁和酒店。", {
+    skipAnalysis: true,
+    contentDate: "2026-07-15T10:00:00+08:00",
+  });
+  await user.write({
+    layer: "episodic",
+    content: "trip-marker 用户订了2026年7月30日前往杭州的高铁和酒店。",
+    archival_ref: plannedSource.archival.id,
+    eventAt: "2026-07-30T08:00:00+08:00",
+    source: { authoritative: false, origin: "test", chain_depth: 1 },
+  });
+  const cancelledSource = await user.ingest("后来我把杭州行程取消了，7月30日不会出发。", {
+    skipAnalysis: true,
+    contentDate: "2026-07-22T10:00:00+08:00",
+  });
+  const cancelled = await user.write({
+    layer: "episodic",
+    content: "trip-marker 用户已取消杭州行程，原定于2026年7月30日的出发不会发生。",
+    archival_ref: cancelledSource.archival.id,
+    eventAt: "2026-07-22T10:00:00+08:00",
+    source: { authoritative: false, origin: "test", chain_depth: 1 },
+  });
+
+  const packet = await user.recall("trip-marker 7月30日我还要去杭州吗？");
+  assert.match(packet.items[0]?.memory.content ?? "", /取消/);
+  assert.ok(packet.items.some((item) => item.memory.id === cancelled.id));
   await nemos.close();
 });

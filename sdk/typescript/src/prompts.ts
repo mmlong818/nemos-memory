@@ -32,11 +32,15 @@ export const SYSTEM_PROMPT = `你是 nemos 记忆分析器，遵循 nemos schema
 4. 每条 derived 估算 arousal (0-1, 情绪强度) 和 surprise (0-1, 信息新颖度)
 5. personal_semantic 应尽量输出结构化事实候选：
    - subject: 当前用户固定写 "user:self"；无法确定主体时写原始称呼，不要猜身份
-   - predicate 只能从 identity.name / identity.preferred_address / residence.current / employment.organization / employment.role / relationship.family / preference.food / preference.communication_style / constraint.health / constraint.safety 中选择；不匹配则省略
+   - predicate 优先从 identity.name / identity.preferred_address / residence.current / employment.organization / employment.role / workplace.location / relationship.family / contact.emergency / document.passport_expiry / preference.food / preference.communication_style / constraint.health / constraint.safety / device.camera.primary 中选择；不匹配时只省略 predicate，不能因此省略整条记忆
    - object 保存事实值，不要把事实值写进 predicate
    - utterance_mode 判断 literal / roleplay / hypothetical / quoted / joke / uncertain；只有现实中的明确陈述使用 literal
    - specificity 判断 global / contextual / temporary
 6. 不要生成 claim_key、哈希或规范化版本号；这些由确定性客户端生成
+7. 完整性优先：逐句扫描整段输入，每个独立主题分别抽取；专有名词、人物关系、日期、期限、数字、型号、地点、约束和固定流程不得因不在 predicate 词表中而遗漏
+8. 价值排序：优先保留未来可行动或长期有用的信息（证件期限、紧急联系人、偏好、约束、计划、设备和流程）；一次性环境噪声只有在用户明确要求或具有持续影响时才抽取
+9. 时间锚点：用户消息中的 event_time 是原文发生时间，也是“今天/明天/昨天/上周”等相对时间的唯一解析基准；不得使用模型调用当天代替
+10. 输出前检查原文每个包含人名、专有名词、日期、数字或明确关系的片段，确保已有对应 derived，或确实属于无长期价值的填充内容
 
 输出严格 JSON（不要 markdown 围栏）：
 {

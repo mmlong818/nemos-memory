@@ -1012,7 +1012,7 @@ export interface NemosConfig {
 }
 
 export const LIFECYCLE_ALGORITHM_VERSION = "0.7.1-alpha.1";
-export const RECALL_ALGORITHM_VERSION = "0.7.4-alpha.1";
+export const RECALL_ALGORITHM_VERSION = "0.7.5-alpha.1";
 
 export type LifecycleStage = "append" | "extract" | "persist" | "link" | "schedule" | "complete";
 export type LifecycleStageStatus = "running" | "completed" | "skipped" | "failed";
