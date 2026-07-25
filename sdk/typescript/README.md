@@ -81,7 +81,7 @@ await user.correct(fact.id, {
 });
 ```
 
-事实使用 `claim_key` 收敛。新值不会覆盖历史记录，而是通过有效时间和信念状态成为当前版本。
+事实使用 `claim_key` 收敛。新值不会覆盖历史记录，而是通过有效时间和信念状态成为当前版本。每条记录还会保存 `salience`、`evidence_coverage` 和 `evidence_count`，用于解释长期保留与召回准入。
 
 ## 后台写入
 

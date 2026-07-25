@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { getPredicate, makeClaimKey } from "./claims.js";
 import type { Storage } from "./storage.js";
 import { RECALL_ALGORITHM_VERSION } from "./types.js";
+import { hasDurableSalience } from "./salience.js";
 import type {
   EmbeddingProvider,
   Layer,
@@ -641,9 +642,7 @@ function isLongTermMemoryEligible(memory: Memory, nowValue?: string): boolean {
   const ageDays = (nowMs - eventMs) / 86400000;
   if (ageDays <= 90) return true;
   if (memory.access_count >= 2) return true;
-  if (memory.arousal.value >= 0.3 || memory.surprise.value >= 0.5) return true;
-  return /\b(?:first|successfully|completed|achiev(?:ed|ement)|received|commendation|certification|certified|award(?:ed)?|won|promotion|promoted|offered|joined|cast as|opening night|rare|milestone|graduated|launched|published|signed up|masterclass|(?:baking|sustainable).{0,40}workshop|workshop.{0,40}(?:baking|sustainable)|memorize .{0,30} lines|final rehearsal|discovered|found a new .{1,60} (?:works|helped)|original parts|competition|professional gear|specialized equipment|climbing shoes|improved my performance)\b/i.test(memory.content)
-    || /第一次|成功|完成|成就|表彰|认证|获奖|晋升|录取|加入|主演|首演|稀有|里程碑|毕业|发布|报名|大师课|烘焙工作坊|可持续.{0,20}工作坊|背.{0,10}台词|最终彩排|发现了有效|比赛|专业装备/.test(memory.content);
+  return hasDurableSalience(memory);
 }
 function collapseCurrentClaims(
   items: RecallItem[],

@@ -35,6 +35,7 @@ import {
   type RowMemory,
 } from "./row-mapper.js";
 import { float32ToBuffer } from "../utils/vector.js";
+import { ensureMemoryQualityMetadata } from "../salience.js";
 import * as queueOps from "./queue-ops-sqlite.js";
 import * as decayOps from "./decay-ops-sqlite.js";
 import * as lifecycleOps from "./lifecycle-ops-sqlite.js";
@@ -75,6 +76,7 @@ export class SqliteStorage implements Storage {
 
   /** insert 的三条语句（主表 + FTS + entity FTS）必须原子：崩溃中途会留下"写入成功但搜索不到"的半套数据。 */
   private insertInner(tenantId: string, userId: string, m: Memory): Memory {
+    ensureMemoryQualityMetadata(m);
     const table = m.layer;
     // archival 自动 protected=true（hard rule：archival 永不衰减）
     const archivalProtected = m.layer === "archival" || m.archival_protected === true ? 1 : 0;
@@ -96,7 +98,8 @@ export class SqliteStorage implements Storage {
         data_subject_ids_json, subject_id, subject_resolution, predicate,
         context_dimensions_json, object_json, canonical_object_hash,
         claim_key, claim_key_version, normalizer_version, trust_tier,
-        utterance_mode, specificity, source_event_ids_json, legacy_unstructured
+        utterance_mode, specificity, source_event_ids_json, legacy_unstructured,
+        salience_json, evidence_coverage, evidence_count
       ) VALUES (
         @id, @tenant_id, @user_id, @layer, @type, @scope, @content,
         @source_json, @arousal_json, @surprise_json, @ownership_json,
@@ -110,7 +113,8 @@ export class SqliteStorage implements Storage {
         @data_subject_ids_json, @subject_id, @subject_resolution, @predicate,
         @context_dimensions_json, @object_json, @canonical_object_hash,
         @claim_key, @claim_key_version, @normalizer_version, @trust_tier,
-        @utterance_mode, @specificity, @source_event_ids_json, @legacy_unstructured
+        @utterance_mode, @specificity, @source_event_ids_json, @legacy_unstructured,
+        @salience_json, @evidence_coverage, @evidence_count
       )
     `);
     stmt.run({
@@ -173,6 +177,9 @@ export class SqliteStorage implements Storage {
       specificity: m.specificity ?? null,
       source_event_ids_json: m.source_event_ids ? JSON.stringify(m.source_event_ids) : null,
       legacy_unstructured: m.legacy_unstructured ? 1 : 0,
+      salience_json: m.salience ? JSON.stringify(m.salience) : null,
+      evidence_coverage: m.evidence_coverage ?? null,
+      evidence_count: m.evidence_count ?? 0,
     });
 
     // 同步写 FTS

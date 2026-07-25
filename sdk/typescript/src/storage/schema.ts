@@ -63,7 +63,10 @@ export const COMMON_COLS = `
   utterance_mode  TEXT,
   specificity     TEXT,
   source_event_ids_json TEXT,
-  legacy_unstructured INTEGER NOT NULL DEFAULT 0
+  legacy_unstructured INTEGER NOT NULL DEFAULT 0,
+  salience_json TEXT,
+  evidence_coverage TEXT,
+  evidence_count INTEGER NOT NULL DEFAULT 0
 `;
 
 // v0.2 新增列（用于 migration v0.1 → v0.2）
@@ -133,6 +136,12 @@ const V071_NEW_COLUMNS: Array<{ name: string; ddl: string }> = [
   { name: "specificity", ddl: "ALTER TABLE %TABLE% ADD COLUMN specificity TEXT" },
   { name: "source_event_ids_json", ddl: "ALTER TABLE %TABLE% ADD COLUMN source_event_ids_json TEXT" },
   { name: "legacy_unstructured", ddl: "ALTER TABLE %TABLE% ADD COLUMN legacy_unstructured INTEGER NOT NULL DEFAULT 0" },
+];
+
+const V074_NEW_COLUMNS: Array<{ name: string; ddl: string }> = [
+  { name: "salience_json", ddl: "ALTER TABLE %TABLE% ADD COLUMN salience_json TEXT" },
+  { name: "evidence_coverage", ddl: "ALTER TABLE %TABLE% ADD COLUMN evidence_coverage TEXT" },
+  { name: "evidence_count", ddl: "ALTER TABLE %TABLE% ADD COLUMN evidence_count INTEGER NOT NULL DEFAULT 0" },
 ];
 
 const INDEX_DDL = (table: string): string => `
@@ -207,6 +216,9 @@ export function applyMigrations(db: Database.Database): void {
       if (!existing.has(col.name)) db.exec(col.ddl.replace("%TABLE%", layer));
     }
     for (const col of V071_NEW_COLUMNS) {
+      if (!existing.has(col.name)) db.exec(col.ddl.replace("%TABLE%", layer));
+    }
+    for (const col of V074_NEW_COLUMNS) {
       if (!existing.has(col.name)) db.exec(col.ddl.replace("%TABLE%", layer));
     }
     if (layer === "personal_semantic") {

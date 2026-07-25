@@ -8,6 +8,7 @@ import type {
   ProvenanceEdge,
 } from "../types.js";
 import { nowIso } from "../utils/id.js";
+import { rowToMemory, type RowMemory } from "./row-mapper.js";
 
 export function listClaimEntries(
   db: Database.Database,
@@ -93,6 +94,20 @@ export function addMemorySourceEvent(
   ids = [...new Set([...ids, sourceEventId])];
   db.prepare(`UPDATE ${layer} SET source_event_ids_json=?
     WHERE id=? AND tenant_id=? AND user_id=?`).run(JSON.stringify(ids), id, tenantId, userId);
+
+  const updated = db.prepare(`SELECT * FROM ${layer}
+    WHERE id=? AND tenant_id=? AND user_id=?`).get(id, tenantId, userId) as RowMemory | undefined;
+  if (!updated) return;
+  const memory = rowToMemory(updated);
+  db.prepare(`UPDATE ${layer} SET salience_json=?, evidence_coverage=?, evidence_count=?
+    WHERE id=? AND tenant_id=? AND user_id=?`).run(
+      JSON.stringify(memory.salience),
+      memory.evidence_coverage ?? null,
+      memory.evidence_count ?? 0,
+      id,
+      tenantId,
+      userId,
+    );
 }
 
 export function rekeyMemoryClaim(

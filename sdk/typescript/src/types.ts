@@ -122,6 +122,19 @@ export type UtteranceMode =
   | "uncertain";
 
 export type Specificity = "global" | "contextual" | "temporary";
+
+export type EvidenceCoverageState =
+  | "unverified"
+  | "direct"
+  | "supported"
+  | "corroborated";
+
+export interface MemorySalience {
+  score: number;
+  signals: string[];
+  algorithm_version: number;
+  computed_at: string;
+}
 export type SubjectResolution = "resolved" | "provisional" | "ambiguous";
 export type PredicateValueType = "string" | "string_set" | "entity" | "entity_set";
 
@@ -244,6 +257,12 @@ export interface Memory {
   specificity?: Specificity;
   source_event_ids?: string[];
   legacy_unstructured?: boolean;
+
+  /** 持久化的长期显著性，用于稳定准入并解释保留原因。 */
+  salience?: MemorySalience;
+  /** 原始或派生记忆获得了多少独立来源支持。 */
+  evidence_coverage?: EvidenceCoverageState;
+  evidence_count?: number;
 
   /** spec day-1 必锁字段：派生 record 指回 archival */
   archival_ref?: string;
@@ -993,7 +1012,7 @@ export interface NemosConfig {
 }
 
 export const LIFECYCLE_ALGORITHM_VERSION = "0.7.1-alpha.1";
-export const RECALL_ALGORITHM_VERSION = "0.7.3-alpha.1";
+export const RECALL_ALGORITHM_VERSION = "0.7.4-alpha.1";
 
 export type LifecycleStage = "append" | "extract" | "persist" | "link" | "schedule" | "complete";
 export type LifecycleStageStatus = "running" | "completed" | "skipped" | "failed";

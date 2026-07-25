@@ -73,7 +73,9 @@ subject + predicate + context dimensions -> claim_key
 - 未授权的敏感记忆
 - disputed、stale、hidden 或未生效事实
 - 当前事实查询中的假设、玩笑和角色扮演文本
-- 陈旧且缺少长期显著性的无结构琐事
+- 陈旧且持久化显著性不足的无结构琐事
+
+每条记录在写入时计算并保存显著性分数、命中信号和证据覆盖状态。来源从单一事件增加到多事件时，覆盖状态和分数会同步重算。`recall()` 直接使用这份持久化结果，避免每次查询临时猜测。
 
 当结构化和派生结果不足时，系统可以从 archival 补充最多一条直接证据。证据按语义与关键词融合排序，并按内容等价性去重。
 
@@ -88,6 +90,7 @@ subject + predicate + context dimensions -> claim_key
 - ingest queue 与生命周期记录
 - claim index、predicate registry 和 claim-key alias
 - provenance edge 与操作日志
+- 持久化显著性与证据覆盖元数据
 - identity operation
 - reflection cursor 与 lease
 

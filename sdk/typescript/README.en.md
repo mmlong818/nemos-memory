@@ -81,7 +81,7 @@ await user.correct(fact.id, {
 });
 ```
 
-Facts converge through stable `claim_key` identity. A new value does not overwrite history; valid time and belief state determine the current version.
+Facts converge through stable `claim_key` identity. A new value does not overwrite history; valid time and belief state determine the current version. Each record also persists `salience`, `evidence_coverage`, and `evidence_count` for explainable long-term admission.
 
 ## Background ingestion
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.4-alpha.1
+
+- Persisted explainable salience scores and retention signals on every memory.
+- Added direct, supported, corroborated, and unverified evidence coverage states.
+- Recomputed quality metadata when provenance gains independent evidence.
+- Replaced query-time milestone rules with persisted long-term admission metadata.
+- Added idempotent SQLite migration and restart coverage.
 ## 0.7.3-alpha.1
 
 - Added deterministic controlled-claim extraction for common personal facts.

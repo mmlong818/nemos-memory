@@ -30,6 +30,7 @@ import type {
 } from "./types.js";
 import { cosineSimLocal } from "./row-mapper.js";
 import { nowIso } from "../utils/id.js";
+import { ensureMemoryQualityMetadata } from "../salience.js";
 
 export class InMemoryStorage implements Storage {
   private readonly data = new Map<string, Memory>(); // key: tenant|user|layer|id
@@ -64,6 +65,7 @@ export class InMemoryStorage implements Storage {
   }
 
   insert(tenantId: string, userId: string, m: Memory): Memory {
+    ensureMemoryQualityMetadata(m);
     // archival 自动 protected（hard rule）
     if (m.layer === "archival") {
       m.archival_protected = true;
@@ -353,6 +355,7 @@ export class InMemoryStorage implements Storage {
     const memory = this.data.get(this.key(tenantId, userId, layer, id));
     if (!memory || layer === "archival") return;
     memory.source_event_ids = [...new Set([...(memory.source_event_ids ?? []), sourceEventId])];
+    ensureMemoryQualityMetadata(memory);
   }
   rekeyMemoryClaim(tenantId: string, userId: string, layer: Layer, id: string, claimKey: string): void {
     const memory = this.data.get(this.key(tenantId, userId, layer, id));

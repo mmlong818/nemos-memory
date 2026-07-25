@@ -11,7 +11,7 @@ Nemos Memory is a local-first, application-agnostic long-term memory engine for 
 - **Fact evolution**: stable `claim_key` identity, valid time, and event order preserve both current and historical values.
 - **Conflict handling**: confirm, supersede, dispute, correct, invalidate, and reversible identity merge/split operations.
 - **Two-stage recall**: structured and derived memories first, with one bounded raw-evidence fallback when needed.
-- **Long-term salience**: stale trivia is suppressed while important experiences, recent content, and explicit time queries remain available.
+- **Long-term salience**: each memory persists an explainable score, retention signals, and evidence coverage so stale trivia can be suppressed consistently.
 - **Isolation**: user, scope, sensitivity, and provenance boundaries prevent cross-user and cross-context contamination.
 - **Embedded deployment**: SQLite is the default; no separate memory server or database service is required.
 

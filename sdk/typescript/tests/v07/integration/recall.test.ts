@@ -37,7 +37,7 @@ function cleanup(path: string): void {
 
 test("v0.7.2 query plan: current personal question maps to a deterministic claim", () => {
   const plan = planRecallQuery("我现在住在哪里？");
-  assert.equal(plan.algorithm_version, "0.7.3-alpha.1");
+  assert.equal(plan.algorithm_version, "0.7.4-alpha.1");
   assert.equal(plan.intent, "current_fact");
   assert.deepEqual(plan.subject_ids, ["user:self"]);
   assert.deepEqual(plan.predicates, ["residence.current"]);

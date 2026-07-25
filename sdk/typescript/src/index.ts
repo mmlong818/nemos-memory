@@ -23,6 +23,16 @@ export { persistDerivedList } from "./persist-derived.js";
 // v0.7.2: deterministic query planning for multi-channel recall.
 export { planRecallQuery } from "./recall.js";
 
+// v0.7.4: persisted salience and evidence coverage.
+export {
+  SALIENCE_ALGORITHM_VERSION,
+  LONG_TERM_SALIENCE_THRESHOLD,
+  deriveEvidenceCoverage,
+  computeMemorySalience,
+  ensureMemoryQualityMetadata,
+  hasDurableSalience,
+} from "./salience.js";
+
 // v0.7.1：受控事实身份与确定性规范化。
 export {
   CLAIM_KEY_VERSION,
