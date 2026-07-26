@@ -44,6 +44,13 @@ export interface ParsedCheck {
   stats?: VerificationStats;
 }
 
+export class AnalyzeJsonParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AnalyzeJsonParseError";
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -66,7 +73,7 @@ export function parseAnalyzeJson(raw: string): ParsedAnalyze {
   try {
     obj = JSON.parse(cleaned);
   } catch (e) {
-    throw new Error(
+    throw new AnalyzeJsonParseError(
       `[nemos] LLM 输出不是合法 JSON: ${
         e instanceof Error ? e.message : String(e)
       }\n片段: ${cleaned.slice(0, 240)}`,
@@ -85,7 +92,7 @@ export function parseCheckJson(raw: string): ParsedCheck {
   try {
     obj = JSON.parse(cleaned);
   } catch (e) {
-    throw new Error(
+    throw new AnalyzeJsonParseError(
       `[nemos] Check pass JSON 解析失败: ${
         e instanceof Error ? e.message : String(e)
       }\n片段: ${cleaned.slice(0, 240)}`,

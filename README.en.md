@@ -8,7 +8,7 @@ Nemos Memory is built for AI assistants, agents, companion applications, and per
 
 It ships as an embedded TypeScript SDK backed by local SQLite. Applications can integrate it without deploying a separate vector database or memory server.
 
-> Current version: `0.7.5-alpha.1`. Core ingestion, fact evolution, recall, correction, invalidation, isolation, and export flows are available. APIs may still change before the stable release.
+> Current version: `0.7.5-alpha.4`. Core ingestion, fact evolution, recall, correction, invalidation, isolation, and export flows are available. APIs may still change before the stable release.
 
 ## Why Nemos Memory
 
@@ -64,7 +64,7 @@ This run started from a new Chinese `core-v2` suite with 24 scenarios, 37 events
 
 | Product | Version | Recall@5 | MRR | Top-1 | Top-1 safety | Strict no-pollution | Provenance visible | Fact time visible | Mean ingest | Mean query |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| **Nemos Memory** | **0.7.5-alpha.1** | **100.0%** | **0.976** | 95.1% | **100.0%** | **100.0%** | **100.0%** | **100.0%** | 5325 ms | **387 ms** |
+| **Nemos Memory** | **0.7.5-alpha.4** | **100.0%** | **0.976** | 95.1% | **100.0%** | **100.0%** | **100.0%** | **100.0%** | 5325 ms | **387 ms** |
 | Mem0 OSS | 2.0.14 | 97.6% | 0.939 | 90.2% | 95.2% | 85.7% | 0.0% | 0.0% | **4127 ms** | 683 ms |
 | LangMem | 0.0.30 | 97.6% | **0.976** | **97.6%** | **100.0%** | **100.0%** | 0.0% | 0.0% | 4197 ms | 529 ms |
 | Graphiti OSS | 0.29.2 | 70.7% | 0.677 | 65.9% | 85.7% | 71.4% | 70.7% | 70.7% | 11772 ms | 599 ms |

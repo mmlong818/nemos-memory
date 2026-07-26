@@ -239,7 +239,7 @@ export class RecallService {
         return reason === null;
       });
       accepted.push(evidence);
-      items = mergeEvidenceFallback(items, evidence.memories);
+      items = mergeEvidenceFallback(items, evidence.memories, plan);
     }
 
     items = this.prioritizeExplicitUpdates(items, plan);
@@ -334,9 +334,7 @@ export class RecallService {
       includeInvalidated: true,
     };
     const limit = Math.min(8, plan.max_candidates_per_channel);
-    const candidateLimit = plan.intent === "current_fact"
-      ? Math.min(20, plan.max_candidates_per_channel)
-      : limit;
+    const candidateLimit = Math.min(20, plan.max_candidates_per_channel);
     let semantic: Memory[] = [];
     if (this.options.embedding) {
       try {
@@ -688,7 +686,12 @@ function evidenceAdmissionFailure(memory: Memory, plan: QueryPlan, options: Reca
   if (plan.intent === "current_fact" && evidenceUtteranceMode(memory) !== "literal") {
     return "evidence_non_literal";
   }
-  if (plan.intent !== "current_fact" && !plan.time_range && !isLongTermMemoryEligible(memory, options.now)) return "evidence_low_long_term_salience";
+  if (
+    plan.intent !== "current_fact" &&
+    !plan.time_range &&
+    !isLongTermMemoryEligible(memory, options.now) &&
+    !matchesExplicitQuery(memory, plan)
+  ) return "evidence_low_long_term_salience";
   const timestamp = memory.event_at ?? memory.created_at;
   if (plan.time_range?.from && timestamp < plan.time_range.from) return "before_time_range";
   if (plan.time_range?.to && timestamp > plan.time_range.to) return "after_time_range";
@@ -702,6 +705,10 @@ function isSupportedPersonalEvidence(memory: Memory, plan: QueryPlan): boolean {
 
 function isExplicitlyQueriedEvidence(memory: Memory, plan: QueryPlan): boolean {
   if (memory.evidence_coverage !== "supported" && memory.evidence_coverage !== "corroborated") return false;
+  return matchesExplicitQuery(memory, plan);
+}
+
+function matchesExplicitQuery(memory: Memory, plan: QueryPlan): boolean {
   const terms = unique(
     (evidenceLexicalQuery(plan.query).toLowerCase().match(/[a-z0-9_]{3,}|[\p{Script=Han}]{2,}/gu) ?? []),
   );
@@ -787,9 +794,11 @@ function hasTargetClaim(items: RecallItem[], plan: QueryPlan): boolean {
 
 function evidenceLexicalQuery(query: string): string {
   const stopWords = new Set([
-    "a", "an", "and", "about", "at", "did", "do", "does", "end", "experience", "how", "in",
-    "is", "it", "learn", "me", "my", "new", "of", "related", "recently", "significant", "the",
-    "to", "was", "were", "what", "when", "where", "which", "with", "you", "your",
+    "a", "an", "and", "about", "at", "can", "could", "did", "discussed", "do", "does",
+    "earlier", "end", "experience", "for", "from", "got", "had", "has", "have", "how", "in",
+    "is", "it", "learn", "many", "me", "much", "my", "new", "of", "provided", "related",
+    "recently", "remind", "significant", "the", "think", "to", "was", "were", "what", "when",
+    "where", "which", "with", "would", "you", "your",
   ]);
   const terms = query.match(/[\p{L}\p{N}_]+/gu) ?? [];
   const filtered = terms.filter((term) => {
@@ -815,11 +824,12 @@ function rankEvidenceCandidates(semantic: Memory[], lexical: Memory[]): Memory[]
     .map((entry) => entry.memory);
 }
 
-function mergeEvidenceFallback(items: RecallItem[], evidence: Memory[]): RecallItem[] {
+function mergeEvidenceFallback(items: RecallItem[], evidence: Memory[], plan: QueryPlan): RecallItem[] {
   const existingIds = new Set(items.map((item) => item.memory.id));
+  const maxEvidence = Math.max(1, Math.min(4, Math.floor(plan.max_results / 4)));
   const fallback = evidence
     .filter((memory) => !existingIds.has(memory.id) && !items.some((item) => evidenceIsRedundant(memory, item.memory)))
-    .slice(0, 1)
+    .slice(0, maxEvidence)
     .map((memory, index): RecallItem => {
       const contribution = round(CHANNEL_WEIGHTS.evidence / (RRF_K + index + 1));
       return {

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.5-alpha.4
+
+- Retried truncated analyzer JSON with progressively smaller chunks while preserving the immutable source event.
+- Allowed old authoritative events to re-enter recall when the query explicitly names their contents.
+- Reserved several bounded evidence slots for questions that need facts from multiple source events.
+- Expanded evidence-query stop words so conversational phrasing does not dilute lexical source ranking.
+
 ## 0.7.5-alpha.3
 
 - Reserved an early recall-packet slot for authoritative source evidence when derived Top-K results are already full.
