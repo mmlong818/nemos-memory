@@ -363,8 +363,9 @@ export class RecallService {
     );
     const candidates = rankEvidenceCandidates(semantic, lexical);
     if (plan.intent === "current_fact") {
-      return candidates
-        .filter(isCurrentEvidenceEligible)
+      const eligible = candidates.filter(isCurrentEvidenceEligible);
+      if (plan.claim_keys.length === 0) return eligible.slice(0, limit);
+      return eligible
         .sort((left, right) => {
           const rightSequence = this.options.storage.getEventMetadata(right.id)?.event_seq ?? 0;
           const leftSequence = this.options.storage.getEventMetadata(left.id)?.event_seq ?? 0;
@@ -834,6 +835,7 @@ function mergeEvidenceFallback(items: RecallItem[], evidence: Memory[], plan: Qu
       const contribution = round(CHANNEL_WEIGHTS.evidence / (RRF_K + index + 1));
       return {
         memory,
+        excerpt: buildEvidenceExcerpt(memory.content, plan.query),
         score: contribution,
         reasons: [{ channel: "evidence", rank: index + 1, contribution }],
       };
@@ -961,7 +963,7 @@ function applyPacketBudget(items: RecallItem[], plan: QueryPlan, rejected: Recal
   let tokens = 0;
   for (const item of items) {
     if (selected.length >= plan.max_results) break;
-    const itemTokens = Math.max(1, Math.ceil(item.memory.content.length / 4));
+    const itemTokens = Math.max(1, Math.ceil(recallItemContent(item).length / 4));
     if (tokens + itemTokens > plan.max_tokens) {
       rejected.push({ memory_id: item.memory.id, reason: "token_budget" });
       continue;
@@ -973,7 +975,50 @@ function applyPacketBudget(items: RecallItem[], plan: QueryPlan, rejected: Recal
 }
 
 function estimateTokens(items: RecallItem[]): number {
-  return items.reduce((sum, item) => sum + Math.max(1, Math.ceil(item.memory.content.length / 4)), 0);
+  return items.reduce((sum, item) => sum + Math.max(1, Math.ceil(recallItemContent(item).length / 4)), 0);
+}
+
+function recallItemContent(item: RecallItem): string {
+  return item.excerpt ?? item.memory.content;
+}
+
+function buildEvidenceExcerpt(content: string, query: string, maxChars = 2400): string {
+  if (content.length <= maxChars) return content;
+  const terms = unique(
+    (evidenceLexicalQuery(query).toLowerCase().match(/[a-z0-9_]{3,}|[\p{Script=Han}]{2,}/gu) ?? []),
+  );
+  const lower = content.toLowerCase();
+  const maxStart = content.length - maxChars;
+  const starts = new Set<number>([0, maxStart]);
+  for (const term of terms) {
+    let position = lower.indexOf(term);
+    let occurrences = 0;
+    while (position >= 0 && occurrences < 32 && starts.size < 256) {
+      starts.add(Math.max(0, Math.min(maxStart, position - Math.floor(maxChars / 3))));
+      position = lower.indexOf(term, position + term.length);
+      occurrences += 1;
+    }
+  }
+  let bestStart = 0;
+  let bestScore = -1;
+  for (const start of starts) {
+    const window = lower.slice(start, start + maxChars);
+    const score = terms.reduce((total, term) => {
+      let count = 0;
+      let position = window.indexOf(term);
+      while (position >= 0 && count < 3) {
+        count += 1;
+        position = window.indexOf(term, position + term.length);
+      }
+      return total + (count > 0 ? Math.min(term.length, 20) * (10 + count) : 0);
+    }, 0);
+    if (score > bestScore || (score === bestScore && start > bestStart)) {
+      bestStart = start;
+      bestScore = score;
+    }
+  }
+  const body = content.slice(bestStart, bestStart + maxChars).trim();
+  return `${bestStart > 0 ? "..." : ""}${body}${bestStart + maxChars < content.length ? "..." : ""}`;
 }
 
 function uniqueMemories(memories: Memory[]): Memory[] {

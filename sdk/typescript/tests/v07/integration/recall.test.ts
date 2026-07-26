@@ -37,7 +37,7 @@ function cleanup(path: string): void {
 
 test("v0.7.2 query plan: current personal question maps to a deterministic claim", () => {
   const plan = planRecallQuery("我现在住在哪里？");
-  assert.equal(plan.algorithm_version, "0.7.5-alpha.4");
+  assert.equal(plan.algorithm_version, "0.7.5-alpha.5");
   assert.equal(plan.intent, "current_fact");
   assert.deepEqual(plan.subject_ids, ["user:self"]);
   assert.deepEqual(plan.predicates, ["residence.current"]);
@@ -330,6 +330,31 @@ test("v0.7.3 current personal fallback does not treat research documents as user
   assert.equal(packet.reliable, false);
   await nemos.close();
 });
+test("v0.7.5 unknown current facts retain bounded competing source evidence", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const older = await user.ingest("tripmarker family destination Hawaii", {
+    skipAnalysis: true,
+    contentDate: "2023-05-29T07:23:00Z",
+  });
+  const newer = await user.ingest("tripmarker family destination Paris", {
+    skipAnalysis: true,
+    contentDate: "2023-05-30T16:34:00Z",
+  });
+
+  const packet = await user.recall("What is my current tripmarker family destination?", {
+    maxResults: 10,
+    now: "2023-06-01T00:00:00Z",
+  });
+  const ids = new Set(packet.items.map((item) => item.memory.id));
+
+  assert.equal(packet.query_plan.intent, "current_fact");
+  assert.deepEqual(packet.query_plan.claim_keys, []);
+  assert.ok(ids.has(older.archival.id));
+  assert.ok(ids.has(newer.archival.id));
+  await nemos.close();
+});
+
 test("v0.7.2 claim recall: natural question returns only the current fact", async () => {
   const nemos = createNemos();
   const user = nemos.forUser("alice");
@@ -659,8 +684,9 @@ test("v0.7.5 explicit update questions prioritize the latest source event over a
 test("v0.7.5 explicit multi-event questions reserve several authoritative evidence slots", async () => {
   const nemos = createNemos();
   const user = nemos.forUser("alice");
+  const longBackground = "Many days passed in this unrelated background. ".repeat(1200);
   const sunday = await user.ingest(
-    "I attended Sunday mass at St. Mary's Church on January 2.",
+    `${longBackground}I attended Sunday mass at St. Mary's Church on January 2.`,
     { skipAnalysis: true, contentDate: "2023-01-02T10:00:00Z" },
   );
   const ashWednesday = await user.ingest(
@@ -684,5 +710,15 @@ test("v0.7.5 explicit multi-event questions reserve several authoritative eviden
 
   assert.ok(ids.has(sunday.archival.id));
   assert.ok(ids.has(ashWednesday.archival.id));
+  const sundayItem = packet.items.find((item) => item.memory.id === sunday.archival.id);
+  assert.ok(sundayItem?.excerpt);
+  assert.match(sundayItem.excerpt, /Sunday mass at St\. Mary's Church/);
+  assert.ok(sundayItem.excerpt.length < sunday.archival.content.length);
+  const context = await user.getRelevantContext(
+    "How many days passed between Sunday mass at St. Mary's Church and the Ash Wednesday service at the cathedral?",
+    { maxResults: 20, maxTokens: 8192, now: "2026-07-25T00:00:00Z" },
+  );
+  assert.match(context, /Sunday mass at St\. Mary's Church/);
+  assert.ok(context.length < sunday.archival.content.length);
   await nemos.close();
 });

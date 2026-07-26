@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.5-alpha.5
+
+- Projected oversized authoritative events into query-focused excerpts without changing their immutable stored content.
+- Scored excerpt windows by combined query-term coverage so generic early matches cannot displace the strongest evidence span.
+- Budgeted and rendered recall packets from excerpts while keeping search and recall APIs backward-compatible with full memories.
+- Retained bounded competing evidence for current-fact queries that do not map to a controlled claim key.
+
 ## 0.7.5-alpha.4
 
 - Retried truncated analyzer JSON with progressively smaller chunks while preserving the immutable source event.

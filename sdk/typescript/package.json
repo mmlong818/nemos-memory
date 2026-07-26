@@ -1,6 +1,6 @@
 {
   "name": "@nemos/sdk",
-  "version": "0.7.5-alpha.4",
+  "version": "0.7.5-alpha.5",
   "description": "Application-agnostic, local-first memory engine for AI systems with provenance, temporal facts, lifecycle reconciliation, and controllable recall.",
   "license": "PolyForm-Noncommercial-1.0.0",
   "author": "nemos founding team",

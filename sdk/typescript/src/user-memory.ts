@@ -519,7 +519,9 @@ export class UserMemory {
    */
   async getRelevantContext(query: string, options: ContextOptions = {}): Promise<string> {
     const packet = await this.recall(query, options);
-    const memories = packet.items.map((item) => item.memory);
+    const memories = packet.items.map((item) =>
+      item.excerpt ? { ...item.memory, content: item.excerpt } : item.memory,
+    );
     // v0.5：前瞻通道（RFC 0006）——全局 cue 匹配，与领域路由并列、独立。
     const prospectiveLines = await this.collectProspective(query);
     const asMarkdown = options.asMarkdown !== false;
