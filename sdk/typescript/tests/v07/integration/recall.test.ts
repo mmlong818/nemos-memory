@@ -37,7 +37,7 @@ function cleanup(path: string): void {
 
 test("v0.7.2 query plan: current personal question maps to a deterministic claim", () => {
   const plan = planRecallQuery("我现在住在哪里？");
-  assert.equal(plan.algorithm_version, "0.7.5-alpha.8");
+  assert.equal(plan.algorithm_version, "0.7.5-alpha.9");
   assert.equal(plan.intent, "current_fact");
   assert.deepEqual(plan.subject_ids, ["user:self"]);
   assert.deepEqual(plan.predicates, ["residence.current"]);
@@ -850,5 +850,127 @@ test("v0.7.5 explicit multi-event questions reserve several authoritative eviden
   );
   assert.match(context, /Sunday mass at St\. Mary's Church/);
   assert.ok(context.length < sunday.archival.content.length);
+  await nemos.close();
+});
+
+test("v0.7.5 aggregate excerpts prefer completed user expenses over assistant budget noise", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const filler = "Assistant: Set a $20 daily advertising budget for a future workshop. ".repeat(160);
+  const source = await user.ingest([
+    "User: I paid $500 to attend the leadership workshop.",
+    filler,
+    "User: I paid $200 to attend the writing workshop.",
+    filler,
+    "User: I paid $20 to attend the mindfulness workshop.",
+  ].join("\n"), { skipAnalysis: true, contentDate: "2023-06-10T10:00:00Z" });
+
+  const packet = await user.recall(
+    "How much total money did I spend on attending workshops?",
+    { maxResults: 20, maxTokens: 8192 },
+  );
+  const item = packet.items.find((candidate) => candidate.memory.id === source.archival.id);
+
+  assert.ok(item?.excerpt);
+  assert.match(item.excerpt, /\$500/);
+  assert.match(item.excerpt, /\$200/);
+  assert.match(item.excerpt, /\$20/);
+  assert.doesNotMatch(item.excerpt, /daily advertising budget/);
+  await nemos.close();
+});
+
+test("v0.7.5 temporal composition excerpts retain separated dated user events", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const filler = "Assistant: Here is general museum planning advice without a completed visit. ".repeat(90);
+  const visits = [
+    ["January 3", "Louvre Museum"],
+    ["February 8", "Prado Museum"],
+    ["March 12", "British Museum"],
+    ["April 17", "Uffizi Gallery"],
+    ["May 21", "Rijksmuseum"],
+    ["June 26", "Museum of Modern Art"],
+  ];
+  const source = await user.ingest(
+    visits.flatMap(([date, museum]) => [
+      "User: I visited the " + museum + " on " + date + ".",
+      filler,
+    ]).join("\n"),
+    { skipAnalysis: true, contentDate: "2023-06-27T10:00:00Z" },
+  );
+
+  const packet = await user.recall(
+    "List the six museums I visited in order from earliest to latest.",
+    { maxResults: 20, maxTokens: 8192 },
+  );
+  const item = packet.items.find((candidate) => candidate.memory.id === source.archival.id);
+
+  assert.ok(item?.excerpt);
+  for (const [date, museum] of visits) {
+    assert.match(item.excerpt, new RegExp(date));
+    assert.match(item.excerpt, new RegExp(museum));
+  }
+  assert.doesNotMatch(item.excerpt, /general museum planning advice/);
+  await nemos.close();
+});
+
+test("v0.7.5 assistant-reference questions preserve the requested assistant statement", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const source = await user.ingest([
+    "User: Please give me a numbered list of game design parameters.",
+    "Assistant: Background context. ".repeat(240),
+    "Assistant: 27. Sound effects density controls how busy each scene feels.",
+    "Assistant: Additional generic explanation. ".repeat(240),
+  ].join("\n"), { skipAnalysis: true, contentDate: "2023-06-27T10:00:00Z" });
+
+  const packet = await user.recall(
+    "I remember you provided game design parameters. What was the 27th?",
+    { maxResults: 20, maxTokens: 8192 },
+  );
+  const item = packet.items.find((candidate) => candidate.memory.id === source.archival.id);
+
+  assert.ok(item?.excerpt);
+  assert.match(item.excerpt, /27\. Sound effects density/);
+  await nemos.close();
+});
+
+test("v0.7.5 compositional recall expands authoritative sources referenced by crowded candidates", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const sources = [];
+  const museums = [
+    "Louvre Museum",
+    "Prado Museum",
+    "British Museum",
+    "Uffizi Gallery",
+    "Rijksmuseum",
+    "Museum of Modern Art",
+  ];
+  for (const [index, museum] of museums.entries()) {
+    const source = await user.ingest(
+      "User: I visited the " + museum + " on 2023-0" + (index + 1) + "-10.",
+      { skipAnalysis: true, contentDate: "2023-0" + (index + 1) + "-10T10:00:00Z" },
+    );
+    sources.push(source);
+    for (let noise = 0; noise < 12; noise += 1) {
+      await user.write({
+        layer: "personal_semantic",
+        type: "user",
+        content: "Museum visit order planning note " + noise + " for " + museum + ".",
+        archival_ref: source.archival.id,
+        source_event_ids: [source.archival.id],
+        source: { authoritative: false, origin: "test", chain_depth: 1 },
+      });
+    }
+  }
+
+  const packet = await user.recall(
+    "List all six museums I visited in order from earliest to latest.",
+    { maxResults: 20, maxTokens: 8192 },
+  );
+  const ids = new Set(packet.items.map((item) => item.memory.id));
+
+  assert.ok(sources.every((source) => ids.has(source.archival.id)));
   await nemos.close();
 });

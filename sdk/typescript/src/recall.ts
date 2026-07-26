@@ -212,7 +212,10 @@ export class RecallService {
 
     let items = fuseChannels(accepted, plan);
     const minScore = recallOptions.minScore ?? DEFAULT_MIN_SCORE;
-    items = items.filter((item) => item.score >= minScore).slice(0, Math.min(200, plan.max_results * 4));
+    const candidateMultiplier = isCompositionalQuery(plan.query) ? 8 : 4;
+    items = items
+      .filter((item) => item.score >= minScore)
+      .slice(0, Math.min(200, plan.max_results * candidateMultiplier));
     items = collapseCurrentClaims(items, plan, recallOptions, rejected);
     if (this.options.rerank && items.length > 0) {
       const rerankStarted = performance.now();
@@ -233,6 +236,10 @@ export class RecallService {
     if (plan.include_evidence && !hasTargetClaim(items, plan)) {
       const evidence = await this.runChannel("evidence", () =>
         this.evidenceCandidates(plan, recallOptions, queryVector ?? undefined));
+      evidence.memories = rankEvidenceCandidates(
+        evidence.memories,
+        this.referencedEvidenceCandidates(items),
+      ).slice(0, plan.max_candidates_per_channel);
       evidence.memories = evidence.memories.filter((memory) => {
         const reason = evidenceAdmissionFailure(memory, plan, recallOptions);
         if (reason) rejected.push({ memory_id: memory.id, reason });
@@ -334,8 +341,9 @@ export class RecallService {
       includeCold: true,
       includeInvalidated: true,
     };
-    const limit = Math.min(8, plan.max_candidates_per_channel);
-    const candidateLimit = Math.min(20, plan.max_candidates_per_channel);
+    const compositional = isCompositionalQuery(plan.query);
+    const limit = Math.min(compositional ? 20 : 8, plan.max_candidates_per_channel);
+    const candidateLimit = Math.min(compositional ? 50 : 20, plan.max_candidates_per_channel);
     let semantic: Memory[] = [];
     if (this.options.embedding) {
       try {
@@ -375,6 +383,32 @@ export class RecallService {
         .slice(0, 1);
     }
     return candidates.slice(0, limit);
+  }
+
+  private referencedEvidenceCandidates(items: RecallItem[]): Memory[] {
+    const scores = new Map<string, number>();
+    for (const item of items) {
+      const sourceIds = unique([
+        ...(item.memory.archival_ref ? [item.memory.archival_ref] : []),
+        ...(item.memory.source_event_ids ?? []),
+      ]);
+      for (const sourceId of sourceIds) {
+        scores.set(sourceId, (scores.get(sourceId) ?? 0) + item.score);
+      }
+    }
+    return [...scores.entries()]
+      .map(([sourceId, score]) => ({
+        memory: this.options.storage.findById(this.options.tenantId, this.options.userId, sourceId),
+        score,
+      }))
+      .filter((entry): entry is { memory: Memory; score: number } =>
+        entry.memory !== null
+          && entry.memory.layer === "archival"
+          && entry.memory.source.authoritative)
+      .sort((left, right) =>
+        right.score - left.score
+          || effectiveTime(right.memory).localeCompare(effectiveTime(left.memory)))
+      .map((entry) => entry.memory);
   }
 
   private relatedCandidates(
@@ -418,7 +452,7 @@ export class RecallService {
         .filter((source): source is Memory => source !== null)
         .map((source) => source.event_at ?? source.created_at)
         .sort((left, right) => right.localeCompare(left));
-      return sourceTimes[0] ?? memory.created_at;
+      return sourceTimes[0] ?? memory.event_at ?? memory.created_at;
     };
     return items
       .map((item, index) => ({ item, index, sourceTime: sourceTime(item.memory) }))
@@ -727,7 +761,12 @@ function matchesExplicitQuery(memory: Memory, plan: QueryPlan): boolean {
   if (terms.length === 0) return false;
   const searchable = (memory.content + " " + JSON.stringify(memory.object_json ?? "")).toLowerCase();
   const matched = terms.filter((term) => searchable.includes(term)).length;
-  return matched >= Math.min(2, terms.length);
+  const oneStrongEventTerm = isCompositionalQuery(plan.query)
+    && (hasCompletedEventSignal(memory.content) || hasTemporalSignal(memory.content));
+  const required = isRelativeTemporalQuery(plan.query) || oneStrongEventTerm
+    ? 1
+    : Math.min(2, terms.length);
+  return matched >= required;
 }
 
 function isPersonalFactQuery(plan: QueryPlan): boolean {
@@ -806,18 +845,33 @@ function hasTargetClaim(items: RecallItem[], plan: QueryPlan): boolean {
 
 function evidenceLexicalQuery(query: string): string {
   const stopWords = new Set([
-    "a", "an", "and", "about", "at", "can", "could", "did", "discussed", "do", "does",
-    "earlier", "end", "experience", "for", "from", "got", "had", "has", "have", "how", "in",
-    "is", "it", "learn", "many", "me", "much", "my", "new", "of", "provided", "related",
-    "recently", "remind", "significant", "the", "think", "to", "was", "were", "what", "when",
-    "where", "which", "with", "would", "you", "your",
+    "a", "about", "after", "ago", "all", "altogether", "an", "and", "at", "before",
+    "between", "can", "combined", "could", "current", "day", "days", "did", "discussed",
+    "do", "does", "earlier", "earliest", "eight", "end", "experience", "first", "five",
+    "for", "four", "from", "got", "had", "has", "have", "how", "in", "is", "it",
+    "last", "latest", "learn", "list", "many", "me", "month", "months", "much", "my",
+    "new", "nine", "of", "on", "one", "order", "past", "provided", "related", "recently",
+    "remember", "remind", "seven", "significant", "six", "sum", "ten", "the",
+    "think", "three", "to", "total", "two", "was", "week", "weeks", "were", "what",
+    "when", "where", "which", "with", "would", "year", "years", "you", "your",
   ]);
   const terms = query.match(/[\p{L}\p{N}_]+/gu) ?? [];
-  const filtered = terms.filter((term) => {
-    const normalized = term.toLowerCase();
-    return !stopWords.has(normalized) && !/^20\d{2}$/.test(normalized);
-  });
+  const filtered = unique(
+    terms
+      .map((term) => normalizeEvidenceTerm(term))
+      .filter((term) => !stopWords.has(term) && !/^20\d{2}$/.test(term)),
+  );
   return filtered.length > 0 ? filtered.join(" ") : query;
+}
+
+function normalizeEvidenceTerm(term: string): string {
+  const lower = term.toLowerCase();
+  if (!/^[a-z]+$/.test(lower)) return lower;
+  if (lower.length > 5 && lower.endsWith("ies")) return lower.slice(0, -3) + "y";
+  if (lower.length > 5 && lower.endsWith("ing")) return lower.slice(0, -3);
+  if (lower.length > 4 && lower.endsWith("ed")) return lower.slice(0, -2);
+  if (lower.length > 4 && lower.endsWith("s") && !lower.endsWith("ss")) return lower.slice(0, -1);
+  return lower;
 }
 
 function rankEvidenceCandidates(semantic: Memory[], lexical: Memory[]): Memory[] {
@@ -837,38 +891,59 @@ function rankEvidenceCandidates(semantic: Memory[], lexical: Memory[]): Memory[]
 }
 
 function mergeEvidenceFallback(items: RecallItem[], evidence: Memory[], plan: QueryPlan): RecallItem[] {
-  const existingIds = new Set(items.map((item) => item.memory.id));
+  const existingById = new Map(items.map((item) => [item.memory.id, item]));
   const maxEvidence = evidenceSlotLimit(plan);
-  const aggregate = isAggregateQuery(plan.query);
-  const fallback = evidence
+  const compositional = isCompositionalQuery(plan.query);
+  const selectedEvidence = evidence
     .filter((memory) =>
-      !existingIds.has(memory.id)
-      && (aggregate || !items.some((item) => evidenceIsRedundant(memory, item.memory)))
+      existingById.has(memory.id)
+      || compositional
+      || !items.some((item) => evidenceIsRedundant(memory, item.memory))
     )
-    .slice(0, maxEvidence)
-    .map((memory, index): RecallItem => {
-      const contribution = round(CHANNEL_WEIGHTS.evidence / (RRF_K + index + 1));
+    .slice(0, maxEvidence);
+  const promoted = selectedEvidence.map((memory, index): RecallItem => {
+    const contribution = round(CHANNEL_WEIGHTS.evidence / (RRF_K + index + 1));
+    const existing = existingById.get(memory.id);
+    if (existing) {
       return {
-        memory,
-        excerpt: buildEvidenceExcerpt(memory.content, plan.query),
-        score: contribution,
-        reasons: [{ channel: "evidence", rank: index + 1, contribution }],
+        ...existing,
+        excerpt: existing.excerpt ?? buildEvidenceExcerpt(
+          memory.content,
+          plan.query,
+          compositional ? 1800 : 2400,
+        ),
+        reasons: existing.reasons.some((reason) => reason.channel === "evidence")
+          ? existing.reasons
+          : [...existing.reasons, { channel: "evidence", rank: index + 1, contribution }],
       };
-    });
-  if (fallback.length === 0) return items;
+    }
+    return {
+      memory,
+      excerpt: buildEvidenceExcerpt(
+        memory.content,
+        plan.query,
+        compositional ? 1800 : 2400,
+      ),
+      score: contribution,
+      reasons: [{ channel: "evidence", rank: index + 1, contribution }],
+    };
+  });
+  if (promoted.length === 0) return items;
 
+  const promotedIds = new Set(promoted.map((item) => item.memory.id));
   const direct: RecallItem[] = [];
   const indirect: RecallItem[] = [];
   for (const item of items) {
+    if (promotedIds.has(item.memory.id)) continue;
     if (item.reasons.some((reason) => !["related", "domain"].includes(reason.channel))) direct.push(item);
     else indirect.push(item);
   }
-  // Reserve an early packet slot for authoritative evidence. Appending it after
-  // every direct hit makes fallback unreachable whenever Top-K is already full.
+  // Reserve early packet slots for authoritative sources, including sources
+  // already present at a low fused rank.
   const evidenceIndex = Math.min(5, direct.length);
   return [
     ...direct.slice(0, evidenceIndex),
-    ...fallback,
+    ...promoted,
     ...direct.slice(evidenceIndex),
     ...indirect,
   ];
@@ -998,39 +1073,47 @@ function recallItemContent(item: RecallItem): string {
 }
 
 function projectOversizedItems(items: RecallItem[], plan: QueryPlan): RecallItem[] {
+  const maxChars = isCompositionalQuery(plan.query) ? 1800 : 2400;
   return items.map((item) => {
-    if (item.excerpt || item.memory.content.length <= 2400) return item;
+    if (item.excerpt || item.memory.content.length <= maxChars) return item;
     return {
       ...item,
-      excerpt: buildEvidenceExcerpt(item.memory.content, plan.query),
+      excerpt: buildEvidenceExcerpt(item.memory.content, plan.query, maxChars),
     };
   });
 }
 
 function buildEvidenceExcerpt(content: string, query: string, maxChars = 2400): string {
-  if (content.length <= maxChars) return content;
+  const compositional = isCompositionalQuery(query);
+  const preferUser = prefersUserEvidence(query);
+  if (content.length <= maxChars && !preferUser) return content;
   const terms = unique(
     (evidenceLexicalQuery(query).toLowerCase().match(/[a-z0-9_]{3,}|[\p{Script=Han}]{2,}/gu) ?? []),
   );
-  const segments = content
+  let segments = content
     .split(/\n(?=(?:User|Assistant|System|Tool):\s)/g)
     .map((segment) => segment.trim())
     .filter(Boolean);
+  if (compositional) segments = segments.flatMap(splitCompositionalSegment);
   if (segments.length > 1) {
-    const ranked = segments
+    let ranked = segments
       .map((segment, index) => ({ index, segment, score: scoreEvidenceSegment(segment, terms, query) }))
       .filter((candidate) => candidate.score > 0)
       .sort((left, right) => right.score - left.score || right.index - left.index);
+    const userCandidates = ranked.filter((candidate) => /^User:\s/i.test(candidate.segment));
+    if (preferUser && userCandidates.length > 0) ranked = userCandidates;
     const selected: Array<{ index: number; text: string }> = [];
     let remaining = maxChars;
+    const targetSpan = compositional ? 360 : 700;
+    const maxSpans = compositional ? 10 : 6;
     for (const candidate of ranked) {
       const separatorLength = selected.length === 0 ? 0 : 5;
-      const spanLimit = Math.min(700, remaining - separatorLength);
-      if (spanLimit < 120) break;
-      const text = bestEvidenceWindow(candidate.segment, terms, spanLimit);
-      selected.push({ index: candidate.index, text });
-      remaining -= text.length + separatorLength;
-      if (selected.length >= 6) break;
+      const spanLimit = Math.min(targetSpan, remaining - separatorLength);
+      if (spanLimit < 100) break;
+      const excerpt = bestEvidenceWindow(candidate.segment, terms, spanLimit, query);
+      selected.push({ index: candidate.index, text: excerpt });
+      remaining -= excerpt.length + separatorLength;
+      if (selected.length >= maxSpans) break;
     }
     if (selected.length > 0) {
       const body = selected
@@ -1040,7 +1123,30 @@ function buildEvidenceExcerpt(content: string, query: string, maxChars = 2400): 
       return `...${body}...`;
     }
   }
-  return bestEvidenceWindow(content, terms, maxChars);
+  return bestEvidenceWindow(content, terms, maxChars, query);
+}
+
+function splitCompositionalSegment(segment: string): string[] {
+  if (segment.length <= 520) return [segment];
+  const role = segment.match(/^(?:User|Assistant|System|Tool):\s*/i)?.[0] ?? "";
+  const body = role ? segment.slice(role.length) : segment;
+  const sentences = body
+    .split(/(?<=[.!?。！？])\s+(?=[\p{L}\p{N}"'“‘(])/u)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  if (sentences.length <= 1) return [segment];
+  const chunks: string[] = [];
+  let current = "";
+  for (const sentence of sentences) {
+    if (current && current.length + sentence.length + 1 > 520) {
+      chunks.push(`${role}${current}`);
+      current = sentence;
+    } else {
+      current = current ? `${current} ${sentence}` : sentence;
+    }
+  }
+  if (current) chunks.push(`${role}${current}`);
+  return chunks;
 }
 
 function scoreEvidenceSegment(segment: string, terms: string[], query: string): number {
@@ -1049,43 +1155,75 @@ function scoreEvidenceSegment(segment: string, terms: string[], query: string): 
     (total, term) => total + (lower.includes(term) ? Math.min(term.length, 20) * 10 : 0),
     0,
   );
-  const firstPersonQuery = /\b(?:i|me|my|mine)\b/i.test(query);
-  if (firstPersonQuery && /^User:\s/i.test(segment)) score += 100;
-  if (/\b(?:how much|total money|spent|cost|expenses?)\b/i.test(query) && /(?:[\u0024\u20ac\u00a3\u00a5]\s*\d|\d[\d,.]*\s*(?:dollars?|yuan|euros?|pounds?))/i.test(segment)) {
-    score += 220;
+  const userSegment = /^User:\s/i.test(segment);
+  const assistantSegment = /^Assistant:\s/i.test(segment);
+  if (prefersUserEvidence(query)) {
+    if (userSegment) score += 180;
+    if (assistantSegment) score -= 120;
   }
-  if (/\b(?:how many|total|sum|before|after|between|combined|altogether)\b|\u591a\u5c11|\u603b\u5171|\u5408\u8ba1|\u4e4b\u524d|\u4e4b\u540e|\u4e4b\u95f4/i.test(query) && /\d/.test(segment)) {
-    score += 80;
-  }
-  if (/\bprojects?\b|\u9879\u76ee/i.test(query) && /\b(?:solo project|led (?:the )?.{0,40}team|currently leading)\b/i.test(segment)) {
-    score += 220;
-  }
+  if (isMoneyQuery(query) && hasMoneySignal(segment)) score += 240;
+  if (isAggregateQuery(query) && /\d/.test(segment)) score += 100;
+  if (isCompositionalQuery(query) && hasCompletedEventSignal(segment)) score += 200;
+  if (isCompositionalQuery(query) && hasFutureSignal(segment) && !hasCompletedEventSignal(segment)) score -= 160;
+  if (isTemporalCompositionQuery(query) && hasTemporalSignal(segment)) score += 200;
+  const ordinal = referencedOrdinal(query);
+  if (ordinal && new RegExp("(?:^|\\b)" + ordinal + "\\s*[.)\\]:-]").test(segment)) score += 500;
   return score;
 }
 
-function bestEvidenceWindow(content: string, terms: string[], maxChars: number): string {
+function bestEvidenceWindow(content: string, terms: string[], maxChars: number, query: string): string {
   if (content.length <= maxChars) return content.trim();
   const lower = content.toLowerCase();
   const maxStart = content.length - maxChars;
   const starts = new Set<number>([0, maxStart]);
+  const addAnchor = (position: number): void => {
+    starts.add(Math.max(0, Math.min(maxStart, position - Math.floor(maxChars / 3))));
+  };
   for (const term of terms) {
     let position = lower.indexOf(term);
     let occurrences = 0;
     while (position >= 0 && occurrences < 32 && starts.size < 256) {
-      starts.add(Math.max(0, Math.min(maxStart, position - Math.floor(maxChars / 3))));
+      addAnchor(position);
       position = lower.indexOf(term, position + term.length);
       occurrences += 1;
     }
   }
+  if (isMoneyQuery(query)) {
+    for (const match of content.matchAll(/(?:[$€£¥]\s*\d|\d[\d,.]*\s*(?:dollars?|yuan|euros?|pounds?))/gi)) {
+      addAnchor(match.index);
+    }
+  }
+  if (isCompositionalQuery(query)) {
+    for (const match of content.matchAll(/\b(?:attended|went|visited|bought|purchased|assembled|sold|fixed|repaired|serviced|baked|finished|completed|received|submitted|flew|stayed|spent|paid|earned|started|began|rearranged|replaced|viewed|participated|volunteered|graduated|enrolled|studied|subscribed|gave birth|was born)\b/gi)) {
+      addAnchor(match.index);
+    }
+  }
+  const ordinal = referencedOrdinal(query);
+  if (ordinal) {
+    for (const match of content.matchAll(new RegExp("(?:^|\\b)" + ordinal + "\\s*[.)\\]:-]", "g"))) {
+      addAnchor(match.index);
+    }
+  }
+  if (isTemporalCompositionQuery(query)) {
+    for (const match of content.matchAll(/\b(?:20\d{2}(?:[-/.]\d{1,2}){0,2}|January|February|March|April|May|June|July|August|September|October|November|December|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|today|yesterday|last week|last month|last weekend|\d+\s+(?:days?|weeks?|months?|years?)\s+ago)\b/gi)) {
+      addAnchor(match.index);
+    }
+  }
   let bestStart = 0;
-  let bestScore = -1;
+  let bestScore = -Infinity;
   for (const start of starts) {
-    const window = lower.slice(start, start + maxChars);
-    const score = terms.reduce(
-      (total, term) => total + (window.includes(term) ? Math.min(term.length, 20) * 10 : 0),
+    const window = content.slice(start, start + maxChars);
+    const windowLower = window.toLowerCase();
+    let score = terms.reduce(
+      (total, term) => total + (windowLower.includes(term) ? Math.min(term.length, 20) * 10 : 0),
       0,
     );
-    if (score > bestScore || (score === bestScore && start > bestStart)) {
+    if (isMoneyQuery(query) && hasMoneySignal(window)) score += 240;
+    if (isAggregateQuery(query) && /\d/.test(window)) score += 100;
+    if (isCompositionalQuery(query) && hasCompletedEventSignal(window)) score += 200;
+    if (isCompositionalQuery(query) && hasFutureSignal(window) && !hasCompletedEventSignal(window)) score -= 160;
+    if (isTemporalCompositionQuery(query) && hasTemporalSignal(window)) score += 200;
+    if (score > bestScore || (score === bestScore && start < bestStart)) {
       bestStart = start;
       bestScore = score;
     }
@@ -1094,13 +1232,52 @@ function bestEvidenceWindow(content: string, terms: string[], maxChars: number):
   return `${bestStart > 0 ? "..." : ""}${body}${bestStart + maxChars < content.length ? "..." : ""}`;
 }
 
+function referencedOrdinal(query: string): string | null {
+  return query.match(/\b(\d+)(?:st|nd|rd|th)\b/i)?.[1] ?? null;
+}
+
+function prefersUserEvidence(query: string): boolean {
+  const asksAboutSelf = /我|我的|本人|自己|\b(?:i|me|my|mine)\b/i.test(query);
+  if (!asksAboutSelf) return false;
+  const asksAboutAssistant = /(?:你|您).{0,24}(?:说|告诉|提供|推荐|建议|列出|分配|解释)|\b(?:you|your)\b.{0,50}\b(?:said|told|provided|recommended|suggested|listed|allocated|gave|called|described|explained)\b|\b(?:our|the) previous (?:chat|conversation)\b/i.test(query);
+  return !asksAboutAssistant;
+}
+
+function isMoneyQuery(query: string): boolean {
+  return /\b(?:how much|total money|spent|spend|cost|expenses?|cashback|discount|save|price|fare|made from)\b|花了多少|总金额|总费用|多少钱|成本|返现|折扣|节省/i.test(query);
+}
+
+function hasMoneySignal(content: string): boolean {
+  return /(?:[$€£¥]\s*\d|\d[\d,.]*\s*(?:dollars?|yuan|euros?|pounds?))/i.test(content);
+}
+
+function hasCompletedEventSignal(content: string): boolean {
+  return /\b(?:attended|went|visited|bought|purchased|assembled|sold|fixed|repaired|serviced|baked|finished|completed|received|submitted|flew|stayed|spent|paid|earned|started|began|rearranged|replaced|viewed|participated|volunteered|graduated|enrolled|studied|subscribed|gave birth|was born)\b|参加了|去了|参观了|买了|组装了|卖了|修了|烤了|完成了|收到了|提交了|乘坐了|花了|开始了|毕业|出生/i.test(content);
+}
+
+function hasFutureSignal(content: string): boolean {
+  return /\b(?:plan(?:ning)? to|want to|would like to|considering|thinking of|recommend(?:ed|ation)?|suggest(?:ed|ion)?|upcoming|might|may)\b|计划|打算|想要|考虑|推荐|建议|可能/i.test(content);
+}
+
+function hasTemporalSignal(content: string): boolean {
+  return /\b(?:20\d{2}(?:[-/.]\d{1,2}){0,2}|January|February|March|April|May|June|July|August|September|October|November|December|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|today|yesterday|last week|last month|last weekend|\d+\s+(?:days?|weeks?|months?|years?)\s+ago)\b|今天|昨天|上周|上个月|周末|\d{1,2}月\d{1,2}日/i.test(content);
+}
+
 function isAggregateQuery(query: string): boolean {
-  return /\b(?:how many|how much|total|sum|all|before|after|between|combined|altogether)\b|\u591a\u5c11|\u603b\u5171|\u5408\u8ba1|\u4e4b\u524d|\u4e4b\u540e|\u4e4b\u95f4/i.test(query);
+  return /\b(?:how many|how much|total|sum|all|before|after|between|combined|altogether)\b|多少|总共|合计|之前|之后|之间/i.test(query);
+}
+
+function isTemporalCompositionQuery(query: string): boolean {
+  return /\b(?:order|earliest|latest|how long|how many (?:days|weeks|months|years)|days? passed|weeks? (?:ago|had passed)|when did i|from earliest|starting from the earliest|compared to)\b|顺序|最早|最晚|多久|相隔|经过|早到晚|先后/i.test(query);
+}
+
+function isCompositionalQuery(query: string): boolean {
+  return isAggregateQuery(query) || isTemporalCompositionQuery(query);
 }
 
 function evidenceSlotLimit(plan: QueryPlan): number {
-  const ratio = isAggregateQuery(plan.query) ? 0.4 : 0.2;
-  return Math.max(1, Math.min(8, Math.floor(plan.max_results * ratio)));
+  const ratio = isCompositionalQuery(plan.query) ? 0.5 : 0.2;
+  return Math.max(1, Math.min(10, Math.floor(plan.max_results * ratio)));
 }
 
 function uniqueMemories(memories: Memory[]): Memory[] {

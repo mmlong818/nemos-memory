@@ -8,7 +8,7 @@ Nemos Memory is built for AI assistants, agents, companion applications, and per
 
 It ships as an embedded TypeScript SDK backed by local SQLite. Applications can integrate it without deploying a separate vector database or memory server.
 
-> Current version: `0.7.5-alpha.8`. Core ingestion, fact evolution, recall, correction, invalidation, isolation, and export flows are available. APIs may still change before the stable release.
+> Current version: `0.7.5-alpha.9`. Core ingestion, fact evolution, recall, correction, invalidation, isolation, and export flows are available. APIs may still change before the stable release.
 
 ## Why Nemos Memory
 

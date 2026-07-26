@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.5-alpha.9
+
+- Expanded compositional recall so authoritative sources cannot be crowded out by lower-ranked derived candidates.
+- Added role-aware, query-focused evidence excerpts for totals, ordered events, durations, and assistant-reference questions.
+- Normalized simple English inflections during evidence search and preserved strong event matches for relative and multi-source queries.
+- Ordered explicit updates by source-event time so older plans cannot outrank later cancellations.
+
 ## 0.7.5-alpha.8
 
 - Softened relative-time admission when a query explicitly matches evidence whose conversation timestamp differs from the mentioned time.
