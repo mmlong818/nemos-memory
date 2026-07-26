@@ -8,7 +8,7 @@ Nemos Memory is built for AI assistants, agents, companion applications, and per
 
 It ships as an embedded TypeScript SDK backed by local SQLite. Applications can integrate it without deploying a separate vector database or memory server.
 
-> Current version: `0.7.5-alpha.4`. Core ingestion, fact evolution, recall, correction, invalidation, isolation, and export flows are available. APIs may still change before the stable release.
+> Current version: `0.7.5-alpha.8`. Core ingestion, fact evolution, recall, correction, invalidation, isolation, and export flows are available. APIs may still change before the stable release.
 
 ## Why Nemos Memory
 
@@ -54,30 +54,35 @@ Query planning → multi-channel recall → boundary filters → ranking and exp
 
 A new fact value does not erase the old record. Nemos Memory retains history and returns only the active value by default. An older event that finishes asynchronous extraction late cannot overwrite a newer fact.
 
-## Comparison with other open-source projects
+## Formal evaluation
 
-The projects have different goals. Nemos Memory is an embedded, local-first memory kernel; [Mem0](https://github.com/mem0ai/mem0) emphasizes broad integrations and a service ecosystem; [LangMem](https://github.com/langchain-ai/langmem) targets LangGraph agents; and [Graphiti](https://github.com/getzep/graphiti) models changing relationships as a temporal knowledge graph.
+`0.7.5-alpha.8` completed the full 500-question LongMemEval evaluation. All 500 answers were generated successfully, the official judge completed all 500 decisions, and both generation and judge error counts were zero.
 
-### July 25, 2026 head-to-head run
+| Metric | Result |
+|---|---:|
+| Overall accuracy | **84.6%** |
+| Macro average across six task types | **85.9%** |
+| Abstention accuracy | **86.7%** |
+| Questions with traceable sources | 470 / 500 |
+| At least one source recalled among traceable questions | **100.0%** |
+| All sources recalled among traceable questions | **98.5%** |
+| Search latency P50 | 787 ms |
+| Search latency P95 | 940 ms |
 
-This run started from a new Chinese `core-v2` suite with 24 scenarios, 37 events, and 41 queries. All four products received the same inputs, event times, queries, and Top-5 limit in one run, using `gpt-5.6-terra` and `text-embedding-3-small`. Frozen answer aliases provided deterministic scoring; no LLM judge was used.
+| Task type | Accuracy |
+|---|---:|
+| Single-session user facts | **95.7%** |
+| Single-session preferences | 73.3% |
+| Single-session assistant statements | **94.6%** |
+| Multi-session | 71.4% |
+| Temporal reasoning | **82.7%** |
+| Knowledge update | **97.4%** |
 
-| Product | Version | Recall@5 | MRR | Top-1 | Top-1 safety | Strict no-pollution | Provenance visible | Fact time visible | Mean ingest | Mean query |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| **Nemos Memory** | **0.7.5-alpha.4** | **100.0%** | **0.976** | 95.1% | **100.0%** | **100.0%** | **100.0%** | **100.0%** | 5325 ms | **387 ms** |
-| Mem0 OSS | 2.0.14 | 97.6% | 0.939 | 90.2% | 95.2% | 85.7% | 0.0% | 0.0% | **4127 ms** | 683 ms |
-| LangMem | 0.0.30 | 97.6% | **0.976** | **97.6%** | **100.0%** | **100.0%** | 0.0% | 0.0% | 4197 ms | 529 ms |
-| Graphiti OSS | 0.29.2 | 70.7% | 0.677 | 65.9% | 85.7% | 71.4% | 70.7% | 70.7% | 11772 ms | 599 ms |
+The run used the LongMemEval `oracle` dataset variant, Top-20 recall, the shared external reader `gpt-5.6-terra`, and the official judge model `gpt-4o-2024-08-06`. The track evaluates recalled memory facts without using each product's own agent answerer, so the result measures the ingestion, recall, and evidence-use pipeline rather than complete application intelligence.
 
-`Top-1 safety` checks whether the first result is a known incorrect fact. `Strict no-pollution` requires the complete Top-5 to exclude stale values, role-play, and third-party contamination. A 0% provenance or fact-time score only means those fields were not exposed by the product's native search result through the adapter used in this run; it does not prove that the product has no related internal capability.
+Of the remaining 77 failures, 41 lacked sufficient evidence in the recall packet, 32 came from reader or conflict handling, and 4 came from abstention decisions. The next phase prioritizes sparse-evidence coverage for multi-session, preference, and temporal questions.
 
-### Current assessment
-
-In this run, Nemos reached 100% Recall@5, Top-1 safety, strict no-pollution, provenance exposure, and fact-time exposure, with 387 ms mean query latency and no runtime errors. It closed the previous gaps in explicit-year history, workplace facts, dense high-value extraction, relative-time anchoring, and long-gap device updates.
-
-The remaining gap is concentrated in first-result ranking and ingest latency. Nemos reached 95.1% Top-1 versus LangMem's 97.6%, while mean ingest time remained above Mem0 and LangMem. The next phase should broaden automatic predicate normalization and reduce model wait time during extraction.
-
-This is not a universal leaderboard. The suite is still limited and does not yet cover deletion propagation, very-long-term decay, concurrent writes, or API cost. Nemos used single-pass extraction with double checking and automatic linking disabled, so it did not gain an advantage from extra model calls.
+This is not directly comparable with the public LongMemEval leaderboard because the `oracle` variant and shared external reader define a separate track. Numerical comparisons with [Mem0](https://github.com/mem0ai/mem0), [LangMem](https://github.com/langchain-ai/langmem), and [Graphiti](https://github.com/getzep/graphiti) will only be published after rerunning them with identical data, models, parameters, and judging protocol.
 
 ## Install
 
