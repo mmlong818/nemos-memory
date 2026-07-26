@@ -669,8 +669,9 @@ function admissionFailure(memory: Memory, plan: QueryPlan, options: RecallOption
     if (options.confidenceMin === "medium" && confidence && !["high", "medium"].includes(confidence)) return "confidence_below_medium";
   }
   const timestamp = memory.event_at ?? memory.valid_at ?? memory.created_at;
-  if (plan.time_range?.from && timestamp < plan.time_range.from) return "before_time_range";
-  if (plan.time_range?.to && timestamp > plan.time_range.to) return "after_time_range";
+  const softRelativeMatch = canUseRelativeTemporalEvidence(memory, plan);
+  if (plan.time_range?.from && timestamp < plan.time_range.from && !softRelativeMatch) return "before_time_range";
+  if (plan.time_range?.to && timestamp > plan.time_range.to && !softRelativeMatch) return "after_time_range";
   if (plan.intent === "current_fact" && memory.valid_at && memory.valid_at > new Date(options.now ?? Date.now()).toISOString()) {
     return "not_yet_valid";
   }
@@ -695,9 +696,18 @@ function evidenceAdmissionFailure(memory: Memory, plan: QueryPlan, options: Reca
     !matchesExplicitQuery(memory, plan)
   ) return "evidence_low_long_term_salience";
   const timestamp = memory.event_at ?? memory.created_at;
-  if (plan.time_range?.from && timestamp < plan.time_range.from) return "before_time_range";
-  if (plan.time_range?.to && timestamp > plan.time_range.to) return "after_time_range";
+  const softRelativeMatch = canUseRelativeTemporalEvidence(memory, plan);
+  if (plan.time_range?.from && timestamp < plan.time_range.from && !softRelativeMatch) return "before_time_range";
+  if (plan.time_range?.to && timestamp > plan.time_range.to && !softRelativeMatch) return "after_time_range";
   return null;
+}
+
+function canUseRelativeTemporalEvidence(memory: Memory, plan: QueryPlan): boolean {
+  return isRelativeTemporalQuery(plan.query) && matchesExplicitQuery(memory, plan);
+}
+
+function isRelativeTemporalQuery(query: string): boolean {
+  return /(?:last|past)\s+(?:day|week|month|year|24\s*hours)|today|yesterday|\u4eca\u5929|\u6628\u5929|\u4e0a\u5468|\u4e0a\u4e2a\u6708|\u53bb\u5e74|\u6700\u8fd1\s*24\s*\u5c0f\u65f6/i.test(query);
 }
 
 function isSupportedPersonalEvidence(memory: Memory, plan: QueryPlan): boolean {
@@ -829,8 +839,12 @@ function rankEvidenceCandidates(semantic: Memory[], lexical: Memory[]): Memory[]
 function mergeEvidenceFallback(items: RecallItem[], evidence: Memory[], plan: QueryPlan): RecallItem[] {
   const existingIds = new Set(items.map((item) => item.memory.id));
   const maxEvidence = evidenceSlotLimit(plan);
+  const aggregate = isAggregateQuery(plan.query);
   const fallback = evidence
-    .filter((memory) => !existingIds.has(memory.id) && !items.some((item) => evidenceIsRedundant(memory, item.memory)))
+    .filter((memory) =>
+      !existingIds.has(memory.id)
+      && (aggregate || !items.some((item) => evidenceIsRedundant(memory, item.memory)))
+    )
     .slice(0, maxEvidence)
     .map((memory, index): RecallItem => {
       const contribution = round(CHANNEL_WEIGHTS.evidence / (RRF_K + index + 1));
@@ -1043,6 +1057,9 @@ function scoreEvidenceSegment(segment: string, terms: string[], query: string): 
   if (/\b(?:how many|total|sum|before|after|between|combined|altogether)\b|\u591a\u5c11|\u603b\u5171|\u5408\u8ba1|\u4e4b\u524d|\u4e4b\u540e|\u4e4b\u95f4/i.test(query) && /\d/.test(segment)) {
     score += 80;
   }
+  if (/\bprojects?\b|\u9879\u76ee/i.test(query) && /\b(?:solo project|led (?:the )?.{0,40}team|currently leading)\b/i.test(segment)) {
+    score += 220;
+  }
   return score;
 }
 
@@ -1077,9 +1094,12 @@ function bestEvidenceWindow(content: string, terms: string[], maxChars: number):
   return `${bestStart > 0 ? "..." : ""}${body}${bestStart + maxChars < content.length ? "..." : ""}`;
 }
 
+function isAggregateQuery(query: string): boolean {
+  return /\b(?:how many|how much|total|sum|all|before|after|between|combined|altogether)\b|\u591a\u5c11|\u603b\u5171|\u5408\u8ba1|\u4e4b\u524d|\u4e4b\u540e|\u4e4b\u95f4/i.test(query);
+}
+
 function evidenceSlotLimit(plan: QueryPlan): number {
-  const aggregate = /\b(?:how many|how much|total|sum|all|before|after|between|combined|altogether)\b|\u591a\u5c11|\u603b\u5171|\u5408\u8ba1|\u4e4b\u524d|\u4e4b\u540e|\u4e4b\u95f4/i.test(plan.query);
-  const ratio = aggregate ? 0.4 : 0.2;
+  const ratio = isAggregateQuery(plan.query) ? 0.4 : 0.2;
   return Math.max(1, Math.min(8, Math.floor(plan.max_results * ratio)));
 }
 

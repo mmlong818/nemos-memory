@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.5-alpha.8
+
+- Softened relative-time admission when a query explicitly matches evidence whose conversation timestamp differs from the mentioned time.
+- Preserved distinct authoritative source events for aggregate recall even when derived candidates partially overlap them.
+- Prioritized explicit project-leadership spans in long conversations.
+
 ## 0.7.5-alpha.7
 
 - Applied query-focused projections to every oversized recalled memory, preventing long derived transcripts from exhausting the packet budget before source evidence can be included.

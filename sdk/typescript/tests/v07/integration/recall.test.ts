@@ -37,7 +37,7 @@ function cleanup(path: string): void {
 
 test("v0.7.2 query plan: current personal question maps to a deterministic claim", () => {
   const plan = planRecallQuery("我现在住在哪里？");
-  assert.equal(plan.algorithm_version, "0.7.5-alpha.7");
+  assert.equal(plan.algorithm_version, "0.7.5-alpha.8");
   assert.equal(plan.intent, "current_fact");
   assert.deepEqual(plan.subject_ids, ["user:self"]);
   assert.deepEqual(plan.predicates, ["residence.current"]);
@@ -753,6 +753,61 @@ test("v0.7.5 oversized derived memories cannot consume the packet budget with fu
   assert.match(item.excerpt, /Walk for Wildlife/);
   assert.match(item.excerpt, /charity golf tournament/);
   assert.ok(item.excerpt.length < memory.content.length);
+  await nemos.close();
+});
+
+test("v0.7.5 relative-time queries keep explicit matching evidence from the current conversation", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const sourceEvent = await user.ingest(
+    "User: I cleaned my white Adidas sneakers last month.",
+    { skipAnalysis: true, contentDate: "2023-05-30T16:26:00Z" },
+  );
+
+  const packet = await user.recall("Which pair of shoes did I clean last month?", {
+    now: "2023-05-30T01:50:00Z",
+    maxResults: 20,
+    maxTokens: 8192,
+  });
+
+  assert.deepEqual(packet.query_plan.time_range, {
+    from: "2023-04-01T00:00:00.000Z",
+    to: "2023-04-30T23:59:59.999Z",
+  });
+  assert.ok(packet.items.some((item) => item.memory.id === sourceEvent.archival.id));
+  await nemos.close();
+});
+
+test("v0.7.5 aggregate recall keeps source evidence despite an overlapping derived candidate", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const text = "User: I volunteered at the Food for Thought charity gala on September 25th.";
+  const sourceEvent = await user.ingest(text, {
+    skipAnalysis: true,
+    contentDate: "2023-11-29T00:23:00Z",
+  });
+  for (let index = 0; index < 55; index += 1) {
+    await user.write({
+      layer: "personal_semantic",
+      type: "user",
+      content: "Food for Thought charity gala events participate planning item " + index,
+      source: { authoritative: false, origin: "test", chain_depth: 1 },
+    });
+  }
+  await user.write({
+    layer: "personal_semantic",
+    type: "user",
+    content: text,
+    archival_ref: sourceEvent.archival.id,
+    source: { authoritative: false, origin: "test", chain_depth: 1 },
+  });
+
+  const packet = await user.recall(
+    "How many Food for Thought charity gala events did I participate in total?",
+    { maxResults: 20, maxTokens: 8192 },
+  );
+
+  assert.ok(packet.items.some((item) => item.memory.id === sourceEvent.archival.id));
   await nemos.close();
 });
 
