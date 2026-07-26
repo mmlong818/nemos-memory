@@ -827,7 +827,7 @@ function rankEvidenceCandidates(semantic: Memory[], lexical: Memory[]): Memory[]
 
 function mergeEvidenceFallback(items: RecallItem[], evidence: Memory[], plan: QueryPlan): RecallItem[] {
   const existingIds = new Set(items.map((item) => item.memory.id));
-  const maxEvidence = Math.max(1, Math.min(4, Math.floor(plan.max_results / 4)));
+  const maxEvidence = evidenceSlotLimit(plan);
   const fallback = evidence
     .filter((memory) => !existingIds.has(memory.id) && !items.some((item) => evidenceIsRedundant(memory, item.memory)))
     .slice(0, maxEvidence)
@@ -987,6 +987,56 @@ function buildEvidenceExcerpt(content: string, query: string, maxChars = 2400): 
   const terms = unique(
     (evidenceLexicalQuery(query).toLowerCase().match(/[a-z0-9_]{3,}|[\p{Script=Han}]{2,}/gu) ?? []),
   );
+  const segments = content
+    .split(/\n(?=(?:User|Assistant|System|Tool):\s)/g)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (segments.length > 1) {
+    const ranked = segments
+      .map((segment, index) => ({ index, segment, score: scoreEvidenceSegment(segment, terms, query) }))
+      .filter((candidate) => candidate.score > 0)
+      .sort((left, right) => right.score - left.score || right.index - left.index);
+    const selected: Array<{ index: number; text: string }> = [];
+    let remaining = maxChars;
+    for (const candidate of ranked) {
+      const separatorLength = selected.length === 0 ? 0 : 5;
+      const spanLimit = Math.min(700, remaining - separatorLength);
+      if (spanLimit < 120) break;
+      const text = bestEvidenceWindow(candidate.segment, terms, spanLimit);
+      selected.push({ index: candidate.index, text });
+      remaining -= text.length + separatorLength;
+      if (selected.length >= 6) break;
+    }
+    if (selected.length > 0) {
+      const body = selected
+        .sort((left, right) => left.index - right.index)
+        .map((item) => item.text)
+        .join("\n...\n");
+      return `...${body}...`;
+    }
+  }
+  return bestEvidenceWindow(content, terms, maxChars);
+}
+
+function scoreEvidenceSegment(segment: string, terms: string[], query: string): number {
+  const lower = segment.toLowerCase();
+  let score = terms.reduce(
+    (total, term) => total + (lower.includes(term) ? Math.min(term.length, 20) * 10 : 0),
+    0,
+  );
+  const firstPersonQuery = /\b(?:i|me|my|mine)\b/i.test(query);
+  if (firstPersonQuery && /^User:\s/i.test(segment)) score += 100;
+  if (/\b(?:how much|total money|spent|cost|expenses?)\b/i.test(query) && /(?:[\u0024\u20ac\u00a3\u00a5]\s*\d|\d[\d,.]*\s*(?:dollars?|yuan|euros?|pounds?))/i.test(segment)) {
+    score += 220;
+  }
+  if (/\b(?:how many|total|sum|before|after|between|combined|altogether)\b|\u591a\u5c11|\u603b\u5171|\u5408\u8ba1|\u4e4b\u524d|\u4e4b\u540e|\u4e4b\u95f4/i.test(query) && /\d/.test(segment)) {
+    score += 80;
+  }
+  return score;
+}
+
+function bestEvidenceWindow(content: string, terms: string[], maxChars: number): string {
+  if (content.length <= maxChars) return content.trim();
   const lower = content.toLowerCase();
   const maxStart = content.length - maxChars;
   const starts = new Set<number>([0, maxStart]);
@@ -1003,15 +1053,10 @@ function buildEvidenceExcerpt(content: string, query: string, maxChars = 2400): 
   let bestScore = -1;
   for (const start of starts) {
     const window = lower.slice(start, start + maxChars);
-    const score = terms.reduce((total, term) => {
-      let count = 0;
-      let position = window.indexOf(term);
-      while (position >= 0 && count < 3) {
-        count += 1;
-        position = window.indexOf(term, position + term.length);
-      }
-      return total + (count > 0 ? Math.min(term.length, 20) * (10 + count) : 0);
-    }, 0);
+    const score = terms.reduce(
+      (total, term) => total + (window.includes(term) ? Math.min(term.length, 20) * 10 : 0),
+      0,
+    );
     if (score > bestScore || (score === bestScore && start > bestStart)) {
       bestStart = start;
       bestScore = score;
@@ -1019,6 +1064,12 @@ function buildEvidenceExcerpt(content: string, query: string, maxChars = 2400): 
   }
   const body = content.slice(bestStart, bestStart + maxChars).trim();
   return `${bestStart > 0 ? "..." : ""}${body}${bestStart + maxChars < content.length ? "..." : ""}`;
+}
+
+function evidenceSlotLimit(plan: QueryPlan): number {
+  const aggregate = /\b(?:how many|how much|total|sum|all|before|after|between|combined|altogether)\b|\u591a\u5c11|\u603b\u5171|\u5408\u8ba1|\u4e4b\u524d|\u4e4b\u540e|\u4e4b\u95f4/i.test(plan.query);
+  const ratio = aggregate ? 0.4 : 0.2;
+  return Math.max(1, Math.min(8, Math.floor(plan.max_results * ratio)));
 }
 
 function uniqueMemories(memories: Memory[]): Memory[] {

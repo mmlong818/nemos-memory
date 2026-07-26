@@ -37,7 +37,7 @@ function cleanup(path: string): void {
 
 test("v0.7.2 query plan: current personal question maps to a deterministic claim", () => {
   const plan = planRecallQuery("我现在住在哪里？");
-  assert.equal(plan.algorithm_version, "0.7.5-alpha.5");
+  assert.equal(plan.algorithm_version, "0.7.5-alpha.6");
   assert.equal(plan.intent, "current_fact");
   assert.deepEqual(plan.subject_ids, ["user:self"]);
   assert.deepEqual(plan.predicates, ["residence.current"]);
@@ -678,6 +678,53 @@ test("v0.7.5 explicit update questions prioritize the latest source event over a
   const packet = await user.recall("trip-marker 7月30日我还要去杭州吗？");
   assert.match(packet.items[0]?.memory.content ?? "", /取消/);
   assert.ok(packet.items.some((item) => item.memory.id === cancelled.id));
+  await nemos.close();
+});
+
+test("v0.7.5 aggregate questions retain evidence from more than four source events", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const events = [];
+  for (const [index, amount] of [20, 30, 40, 50, 60].entries()) {
+    events.push(await user.ingest(`I spent ${amount} dollars on bike expense item ${index + 1}.`, {
+      skipAnalysis: true,
+      contentDate: `2023-05-0${index + 1}T10:00:00Z`,
+    }));
+  }
+
+  const packet = await user.recall("How much total money did I spend on all bike expense items?", {
+    maxResults: 20,
+    maxTokens: 8192,
+  });
+  const ids = new Set(packet.items.map((item) => item.memory.id));
+
+  assert.ok(events.every((event) => ids.has(event.archival.id)));
+  await nemos.close();
+});
+
+test("v0.7.5 long conversations combine separated user evidence spans", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const advice = "Assistant: General bike maintenance advice. ".repeat(300);
+  const source = await user.ingest([
+    "User: I spent $70 on a bike tune-up.",
+    advice,
+    "User: I spent $75 on a bike helmet.",
+    advice,
+    "User: I spent $40 on bike lights.",
+  ].join("\n"), { skipAnalysis: true, contentDate: "2023-05-05T10:00:00Z" });
+
+  const packet = await user.recall("How much total money have I spent on bike-related expenses?", {
+    maxResults: 20,
+    maxTokens: 8192,
+  });
+  const item = packet.items.find((candidate) => candidate.memory.id === source.archival.id);
+
+  assert.ok(item?.excerpt);
+  assert.match(item.excerpt, /\$70/);
+  assert.match(item.excerpt, /\$75/);
+  assert.match(item.excerpt, /\$40/);
+  assert.ok(item.excerpt.length < source.archival.content.length);
   await nemos.close();
 });
 

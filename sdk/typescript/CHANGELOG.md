@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.5-alpha.6
+
+- Split long conversations into role-aware spans and combined several query-relevant evidence passages into one bounded projection.
+- Prioritized first-person numeric and monetary evidence for aggregate questions without modifying the immutable source event.
+- Expanded aggregate recall packets to retain up to eight distinct authoritative source events.
+
 ## 0.7.5-alpha.5
 
 - Projected oversized authoritative events into query-focused excerpts without changing their immutable stored content.
