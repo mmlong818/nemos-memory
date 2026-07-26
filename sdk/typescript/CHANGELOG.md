@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.5-alpha.7
+
+- Applied query-focused projections to every oversized recalled memory, preventing long derived transcripts from exhausting the packet budget before source evidence can be included.
+
 ## 0.7.5-alpha.6
 
 - Split long conversations into role-aware spans and combined several query-relevant evidence passages into one bounded projection.

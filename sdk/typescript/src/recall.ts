@@ -243,6 +243,7 @@ export class RecallService {
     }
 
     items = this.prioritizeExplicitUpdates(items, plan);
+    items = projectOversizedItems(items, plan);
     items = applyPacketBudget(items, plan, rejected);
 
     const trace = this.makeTrace(plan, accepted, rejected, items, started);
@@ -980,6 +981,16 @@ function estimateTokens(items: RecallItem[]): number {
 
 function recallItemContent(item: RecallItem): string {
   return item.excerpt ?? item.memory.content;
+}
+
+function projectOversizedItems(items: RecallItem[], plan: QueryPlan): RecallItem[] {
+  return items.map((item) => {
+    if (item.excerpt || item.memory.content.length <= 2400) return item;
+    return {
+      ...item,
+      excerpt: buildEvidenceExcerpt(item.memory.content, plan.query),
+    };
+  });
 }
 
 function buildEvidenceExcerpt(content: string, query: string, maxChars = 2400): string {

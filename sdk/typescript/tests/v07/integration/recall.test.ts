@@ -37,7 +37,7 @@ function cleanup(path: string): void {
 
 test("v0.7.2 query plan: current personal question maps to a deterministic claim", () => {
   const plan = planRecallQuery("我现在住在哪里？");
-  assert.equal(plan.algorithm_version, "0.7.5-alpha.6");
+  assert.equal(plan.algorithm_version, "0.7.5-alpha.7");
   assert.equal(plan.intent, "current_fact");
   assert.deepEqual(plan.subject_ids, ["user:self"]);
   assert.deepEqual(plan.predicates, ["residence.current"]);
@@ -725,6 +725,34 @@ test("v0.7.5 long conversations combine separated user evidence spans", async ()
   assert.match(item.excerpt, /\$75/);
   assert.match(item.excerpt, /\$40/);
   assert.ok(item.excerpt.length < source.archival.content.length);
+  await nemos.close();
+});
+
+test("v0.7.5 oversized derived memories cannot consume the packet budget with full transcripts", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const filler = "Assistant: General event planning advice without a completed event. ".repeat(300);
+  const memory = await user.write({
+    layer: "personal_semantic",
+    type: "user",
+    content: [
+      "User: I participated in the Walk for Wildlife charity event.",
+      filler,
+      "User: I participated in the charity golf tournament.",
+    ].join("\n"),
+    source: { authoritative: false, origin: "test", chain_depth: 1 },
+  });
+
+  const packet = await user.recall("How many charity events did I participate in?", {
+    maxResults: 20,
+    maxTokens: 8192,
+  });
+  const item = packet.items.find((candidate) => candidate.memory.id === memory.id);
+
+  assert.ok(item?.excerpt);
+  assert.match(item.excerpt, /Walk for Wildlife/);
+  assert.match(item.excerpt, /charity golf tournament/);
+  assert.ok(item.excerpt.length < memory.content.length);
   await nemos.close();
 });
 
