@@ -32,7 +32,7 @@ export const SYSTEM_PROMPT = `你是 nemos 记忆分析器，遵循 nemos schema
 4. 每条 derived 估算 arousal (0-1, 情绪强度) 和 surprise (0-1, 信息新颖度)
 5. personal_semantic 应尽量输出结构化事实候选：
    - subject: 当前用户固定写 "user:self"；无法确定主体时写原始称呼，不要猜身份
-   - predicate 优先从 identity.name / identity.preferred_address / residence.current / employment.organization / employment.role / workplace.location / relationship.family / contact.emergency / document.passport_expiry / preference.food / preference.communication_style / constraint.health / constraint.safety / device.camera.primary 中选择；不匹配时只省略 predicate，不能因此省略整条记忆
+   - predicate 优先从 identity.name / identity.preferred_address / residence.current / employment.organization / employment.role / workplace.location / relationship.family / contact.emergency / document.passport_expiry / preference.food / preference.communication_style / constraint.health / constraint.safety / device.camera.primary / achievement.personal_best 中选择；不匹配时只省略 predicate，不能因此省略整条记忆
    - object 保存事实值，不要把事实值写进 predicate
    - utterance_mode 判断 literal / roleplay / hypothetical / quoted / joke / uncertain；只有现实中的明确陈述使用 literal
    - specificity 判断 global / contextual / temporary
@@ -44,6 +44,7 @@ export const SYSTEM_PROMPT = `你是 nemos 记忆分析器，遵循 nemos schema
 11. 表格、排班、清单和键值结构必须保留精确对应关系：不能只概括表名、列名或名单；每个可能被查询的行列交叉关系分别形成事实，并保留姓名、日期、时段、数量与单位
 12. derived.content 必须使用对应原文片段的语言，不得翻译；英文事实保持英文，中文事实保持中文，专有名词保留原写法
 13. type 表示事实归属：用户经历、状态、计划、偏好和待办必须标为 user；助手提供的通用知识或建议标为 reference；不要因为事实来自助手回复就把其中复述的用户事实标成 reference
+14. 同一消息内出现计划、执行、取消或替代时，必须按语义顺序保存最终状态：已经完成、交换或取消的旧动作不得继续写成独立的待办；只剩下的新动作要明确写出。复合句可保留过程，但必须标清哪些已完成、哪些仍待处理
 
 输出严格 JSON（不要 markdown 围栏）：
 {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.5-alpha.3
+
+- Reserved an early recall-packet slot for authoritative source evidence when derived Top-K results are already full.
+- Clarified extraction of task transitions so completed, exchanged, cancelled, and remaining actions are not conflated.
+- Reconciled personal-best metrics by activity so newer records replace older values without losing provenance.
+- Classified controlled facts sentence by sentence so unrelated conditional wording cannot suppress literal facts.
+- Allowed explicit supported matches to bypass age-based salience filtering when the query names the stored fact.
+
 ## 0.7.5-alpha.2
 
 - Honored explicit recall result and token budgets instead of silently capping Top-K at 12.

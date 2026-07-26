@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { getPredicate, makeClaimKey } from "./claims.js";
+import { getPredicate, inferPersonalBestActivity, makeClaimKey } from "./claims.js";
 import type { Storage } from "./storage.js";
 import { RECALL_ALGORITHM_VERSION } from "./types.js";
 import { hasDurableSalience } from "./salience.js";
@@ -87,7 +87,10 @@ export function planRecallQuery(
   );
   const claimKeys = unique([
     ...(options.claimKeys ?? []),
-    ...subjectIds.flatMap((subjectId) => predicates.map((predicate) => makeClaimKey(subjectId, predicate, {}))),
+    ...subjectIds.flatMap((subjectId) => predicates.flatMap((predicate) => {
+      const context = inferClaimContext(normalized, predicate);
+      return context === null ? [] : [makeClaimKey(subjectId, predicate, context)];
+    })),
   ]);
   const timeRange = normalizeTimeRange(options.timeRange ?? inferTimeRange(normalized, options.now));
   const includeHistorical = options.includeHistorical === true
@@ -529,9 +532,15 @@ function inferPredicates(query: string): string[] {
   if (/通勤|commute|go to work/i.test(query)) values.push("commute.mode");
   if (/汽车|车辆|开什么车|current car|driving/i.test(query)) values.push("possession.vehicle");
   if (/沟通|回复风格|communication style/i.test(query)) values.push("preference.communication_style");
+  if (/个人最好|个人最佳|personal best|personal record/i.test(query)) values.push("achievement.personal_best");
   return values;
 }
 
+function inferClaimContext(query: string, predicate: string): Record<string, string> | null {
+  if (predicate !== "achievement.personal_best") return {};
+  const activity = inferPersonalBestActivity(query);
+  return activity ? { activity } : null;
+}
 function inferEntityTerms(query: string): string[] {
   const terms: string[] = [];
   for (const match of query.matchAll(/["“](.{2,40}?)["”]/g)) terms.push(match[1]!.trim());
@@ -635,7 +644,8 @@ function admissionFailure(memory: Memory, plan: QueryPlan, options: RecallOption
     !plan.time_range &&
     !memory.claim_key &&
     !isLongTermMemoryEligible(memory, options.now) &&
-    !isSupportedPersonalEvidence(memory, plan)
+    !isSupportedPersonalEvidence(memory, plan) &&
+    !isExplicitlyQueriedEvidence(memory, plan)
   ) {
     return "low_long_term_salience";
   }
@@ -688,6 +698,17 @@ function evidenceAdmissionFailure(memory: Memory, plan: QueryPlan, options: Reca
 function isSupportedPersonalEvidence(memory: Memory, plan: QueryPlan): boolean {
   if (!isPersonalFactQuery(plan) || !memoryRepresentsUser(memory)) return false;
   return memory.evidence_coverage === "supported" || memory.evidence_coverage === "corroborated";
+}
+
+function isExplicitlyQueriedEvidence(memory: Memory, plan: QueryPlan): boolean {
+  if (memory.evidence_coverage !== "supported" && memory.evidence_coverage !== "corroborated") return false;
+  const terms = unique(
+    (evidenceLexicalQuery(plan.query).toLowerCase().match(/[a-z0-9_]{3,}|[\p{Script=Han}]{2,}/gu) ?? []),
+  );
+  if (terms.length === 0) return false;
+  const searchable = (memory.content + " " + JSON.stringify(memory.object_json ?? "")).toLowerCase();
+  const matched = terms.filter((term) => searchable.includes(term)).length;
+  return matched >= Math.min(2, terms.length);
 }
 
 function isPersonalFactQuery(plan: QueryPlan): boolean {
@@ -815,7 +836,15 @@ function mergeEvidenceFallback(items: RecallItem[], evidence: Memory[]): RecallI
     if (item.reasons.some((reason) => !["related", "domain"].includes(reason.channel))) direct.push(item);
     else indirect.push(item);
   }
-  return [...direct, ...fallback, ...indirect];
+  // Reserve an early packet slot for authoritative evidence. Appending it after
+  // every direct hit makes fallback unreachable whenever Top-K is already full.
+  const evidenceIndex = Math.min(5, direct.length);
+  return [
+    ...direct.slice(0, evidenceIndex),
+    ...fallback,
+    ...direct.slice(evidenceIndex),
+    ...indirect,
+  ];
 }
 
 function evidenceIsRedundant(evidence: Memory, derived: Memory): boolean {

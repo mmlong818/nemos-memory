@@ -424,3 +424,31 @@ test("v0.7.3 deterministic ingest rejects hypothetical and research-document cla
   assert.ok(!research.derived.some((memory) => memory.predicate === "residence.current"));
   await nemos.close();
 });
+
+test("v0.7.5 personal-best metrics reconcile by activity context", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const oldResult = await user.ingest(
+    "My personal best in the charity 5K run was 27:12.",
+    { contentDate: "2023-05-25T09:00:00Z" },
+  );
+  const currentResult = await user.ingest(
+    "If you could help with endurance, that would be useful. By the way, I am hoping to beat my personal best time of 25:50 in another charity 5K run.",
+    { contentDate: "2023-05-27T09:00:00Z" },
+  );
+  const oldClaim = oldResult.derived.find((memory) => memory.predicate === "achievement.personal_best");
+  const currentClaim = currentResult.derived.find((memory) => memory.predicate === "achievement.personal_best");
+
+  assert.ok(oldClaim);
+  assert.ok(currentClaim);
+  assert.equal(oldClaim.claim_key, currentClaim.claim_key);
+  assert.equal(nemos.raw().storage.findById("default", "alice", oldClaim.id)?.belief_state, "superseded");
+
+  const hypothetical = await user.ingest("If my personal best in the charity 5K run were 24:00, I would celebrate.");
+  assert.ok(!hypothetical.derived.some((memory) => memory.object_json === "24:00"));
+
+  const packet = await user.recall("What was my personal best time in the charity 5K run?");
+  assert.equal(packet.items[0]?.memory.object_json, "25:50");
+  assert.ok(!packet.items.some((item) => item.memory.object_json === "27:12"));
+  await nemos.close();
+});

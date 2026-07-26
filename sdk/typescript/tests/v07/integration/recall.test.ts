@@ -37,7 +37,7 @@ function cleanup(path: string): void {
 
 test("v0.7.2 query plan: current personal question maps to a deterministic claim", () => {
   const plan = planRecallQuery("我现在住在哪里？");
-  assert.equal(plan.algorithm_version, "0.7.5-alpha.2");
+  assert.equal(plan.algorithm_version, "0.7.5-alpha.3");
   assert.equal(plan.intent, "current_fact");
   assert.deepEqual(plan.subject_ids, ["user:self"]);
   assert.deepEqual(plan.predicates, ["residence.current"]);
@@ -241,6 +241,30 @@ test("v0.7.3 evidence fallback does not duplicate an event already represented b
   await nemos.close();
 });
 
+test("v0.7.5 evidence fallback keeps a reserved Top-K slot", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const source = await user.ingest(
+    "I need to pick up one blazer and a pair of boots from the clothing store.",
+    { skipAnalysis: true },
+  );
+  for (let index = 0; index < 25; index++) {
+    await user.write({
+      layer: "procedural",
+      type: "reference",
+      content: `General clothing store pickup and return advice ${index}`,
+      source: { authoritative: false, origin: "test", chain_depth: 1 },
+    });
+  }
+
+  const packet = await user.recall(
+    "How many clothing items do I need to pick up from the store?",
+    { maxResults: 20, maxTokens: 8192 },
+  );
+
+  assert.ok(packet.items.slice(0, 6).some((item) => item.memory.id === source.archival.id));
+  await nemos.close();
+});
 test("v0.7.3 exact current claim shadows legacy unstructured matches and raw history", async () => {
   const nemos = createNemos();
   const user = nemos.forUser("alice");
@@ -517,6 +541,32 @@ test("v0.7.3 long-term admission hides stale unstructured trivia but keeps salie
   assert.ok(packet.items.some((item) => item.memory.id === salient.id));
   const current = await user.recall("我现在住在哪里？", { now: "2026-07-25T00:00:00.000Z" });
   assert.ok(current.items.some((item) => item.memory.id === structured.id));
+  await nemos.close();
+});
+
+test("v0.7.5 explicit queries recover old supported semantic facts", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const sourceEvent = await user.ingest("The assistant produced a weekly shift rotation sheet.", {
+    skipAnalysis: true,
+    contentDate: "2023-05-24T16:21:00Z",
+  });
+  const assignment = await user.write({
+    layer: "semantic",
+    type: "reference",
+    content: "Sunday, 8 am - 4 pm (Day Shift): Admon",
+    archival_ref: sourceEvent.archival.id,
+    eventAt: "2023-05-24T16:21:00Z",
+    specificity: "temporary",
+    source: { authoritative: false, origin: "test", chain_depth: 1 },
+  });
+
+  const packet = await user.recall(
+    "What was the shift rotation for Admon on Sunday?",
+    { now: "2026-07-25T00:00:00Z" },
+  );
+
+  assert.equal(packet.items[0]?.memory.id, assignment.id);
   await nemos.close();
 });
 

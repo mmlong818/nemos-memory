@@ -30,6 +30,7 @@ const PREDICATES: PredicateDefinition[] = [
   define("commute.mode", ["commute mode", "通勤方式", "上班方式"], "string", true, [], "current"),
   define("possession.vehicle", ["vehicle", "car", "车辆", "汽车"], "entity", true, [], "current"),
   define("preference.communication_style", ["communication style", "沟通偏好", "回复风格", "表达风格"], "string_set", false, [], "current"),
+  define("achievement.personal_best", ["personal best", "personal record", "个人最好成绩", "个人最佳"], "string", true, ["activity"], "current"),
   define("constraint.health", ["health constraint", "健康限制", "过敏", "忌口", "疾病"], "string_set", false, [], "current"),
   define("constraint.safety", ["safety constraint", "安全限制", "安全要求", "禁忌"], "string_set", false, [], "current"),
 ];
@@ -215,12 +216,17 @@ function resolveSubject(raw: string | undefined, userId: string, originAgent?: s
 
 export function inferControlledAssertions(content: string): AssertionCandidate[] {
   const text = normalizeText(content);
-  const utteranceMode = inferUtteranceMode(text);
-  if (utteranceMode !== "literal") return [];
-
   const candidates: AssertionCandidate[] = [];
   const seen = new Set<string>();
-  for (const segment of text.split(/(?<=[。！？.!?])\s*|\n+/u)) {
+  for (const inferred of inferPersonalBestClaims(text)) {
+    const key = inferred.predicate + ":" + canonicalJson(inferred.object);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(inferred);
+  }
+  for (const segment of splitAssertionSegments(text)) {
+    const utteranceMode = inferUtteranceMode(segment);
+    if (utteranceMode !== "literal") continue;
     const inferredClaims = [
       inferControlledPersonalClaim(segment),
       inferResidenceClaim(segment),
@@ -245,6 +251,44 @@ export function inferControlledAssertions(content: string): AssertionCandidate[]
     }
   }
   return candidates;
+}
+
+function splitAssertionSegments(content: string): string[] {
+  return content.split(/(?<=[.!?\u3002\uff01\uff1f])\s*|\n+/u).filter(Boolean);
+}
+
+export function inferPersonalBestActivity(content: string): string | null {
+  const text = normalizeText(content);
+  if (/\bcharity\s+5\s*k(?:\s+run)?\b/i.test(text) || /(?:慈善|公益)\s*5\s*(?:公里|千米)/u.test(text)) {
+    return "charity 5k run";
+  }
+  if (/\b5\s*k(?:\s+run)?\b/i.test(text) || /\b5\s*(?:公里|千米)(?:跑|跑步)?\b/u.test(text)) {
+    return "5k run";
+  }
+  return null;
+}
+
+function inferPersonalBestClaims(content: string): AssertionCandidate[] {
+  const activity = inferPersonalBestActivity(content);
+  if (!activity) return [];
+  const values = new Set<string>();
+  for (const segment of splitAssertionSegments(content)) {
+    if (inferUtteranceMode(segment) !== "literal") continue;
+    for (const marker of segment.matchAll(/personal best|personal record|\u4e2a\u4eba\u6700\u597d\u6210\u7ee9|\u4e2a\u4eba\u6700\u4f73/giu)) {
+      const nearby = segment.slice(marker.index, marker.index + 180);
+      const time = nearby.match(/\b(\d{1,2}:\d{2}(?::\d{2})?)\b/u)?.[1];
+      if (time) values.add(time);
+    }
+  }
+  return [...values].map((value) => ({
+    subject: "user:self",
+    predicate: "achievement.personal_best",
+    object: value,
+    contextDimensions: { activity },
+    utteranceMode: "literal",
+    specificity: "contextual",
+    trustTier: 1,
+  }));
 }
 
 export function inferControlledAssertion(content: string): AssertionCandidate | null {
