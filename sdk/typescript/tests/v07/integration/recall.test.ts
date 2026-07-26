@@ -37,7 +37,7 @@ function cleanup(path: string): void {
 
 test("v0.7.2 query plan: current personal question maps to a deterministic claim", () => {
   const plan = planRecallQuery("我现在住在哪里？");
-  assert.equal(plan.algorithm_version, "0.7.5-alpha.9");
+  assert.equal(plan.algorithm_version, "0.7.5-alpha.17");
   assert.equal(plan.intent, "current_fact");
   assert.deepEqual(plan.subject_ids, ["user:self"]);
   assert.deepEqual(plan.predicates, ["residence.current"]);
@@ -974,3 +974,366 @@ test("v0.7.5 compositional recall expands authoritative sources referenced by cr
   assert.ok(sources.every((source) => ids.has(source.archival.id)));
   await nemos.close();
 });
+
+test("v0.7.5 temporal comparison questions use episodic recall", () => {
+  const plan = planRecallQuery("Which item did I purchase first?");
+
+  assert.equal(plan.intent, "episode");
+  assert.ok(plan.layers.includes("episodic"));
+});
+
+test("v0.7.5 standalone month names resolve to the most recent occurrence", () => {
+  const plan = planRecallQuery(
+    "How many museums did I visit in December?",
+    { now: "2024-01-15T12:00:00Z" },
+  );
+
+  assert.deepEqual(plan.time_range, {
+    from: "2023-12-01T00:00:00.000Z",
+    to: "2023-12-31T23:59:59.999Z",
+  });
+  assert.equal(plan.include_historical, true);
+});
+
+test("v0.7.5 compositional current claims continue into multi-source evidence", async () => {
+  let embeddingCalls = 0;
+  const nemos = new Nemos({
+    storage: { type: "memory" },
+    llm: makeMockLLMConfig(),
+    embedding: {
+      provider: "custom",
+      modelId: "test-embedding",
+      dim: 2,
+      embed: async () => {
+        embeddingCalls += 1;
+        return new Float32Array([1, 0]);
+      },
+    },
+    features: { autoLinking: false },
+    worker: { manualWorker: true },
+  });
+  const user = nemos.forUser("alice");
+  const routine = await user.ingest(
+    "User: My morning routine takes 40 minutes.",
+    { skipAnalysis: true, contentDate: "2023-05-01T08:00:00Z" },
+  );
+  const commute = await user.ingest(
+    "User: My commute takes 35 minutes and I travel by train.",
+    { skipAnalysis: true, contentDate: "2023-05-02T08:00:00Z" },
+  );
+  await user.write({
+    layer: "personal_semantic",
+    type: "user",
+    content: "The user commutes by train.",
+    subject: "user:self",
+    predicate: "commute.mode",
+    object: "train",
+    trustTier: 1,
+    utteranceMode: "literal",
+    archival_ref: commute.archival.id,
+    source_event_ids: [commute.archival.id],
+    source: { authoritative: false, origin: "test:user", chain_depth: 1 },
+  });
+  embeddingCalls = 0;
+
+  const packet = await user.recall(
+    "What is my current commute mode and total morning routine plus commute time?",
+    { maxResults: 20, maxTokens: 8192 },
+  );
+  const ids = new Set(packet.items.map((item) => item.memory.id));
+
+  assert.equal(packet.query_plan.intent, "current_fact");
+  assert.equal(packet.query_plan.claim_keys.length, 1);
+  assert.ok(packet.query_plan.layers.includes("episodic"));
+  assert.ok(embeddingCalls > 0);
+  assert.ok(ids.has(routine.archival.id));
+  assert.ok(ids.has(commute.archival.id));
+  await nemos.close();
+});
+
+test("v0.7.5 ordinal excerpts find an item inside one long assistant list", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const items = Array.from({ length: 100 }, (_, index) =>
+    `${index + 1}. Design parameter ${index + 1} has a distinct purpose.`).join(" ");
+  const source = await user.ingest(
+    `User: Give me a long numbered list of design parameters.\nAssistant: ${items}`,
+    { skipAnalysis: true, contentDate: "2023-06-27T10:00:00Z" },
+  );
+
+  const packet = await user.recall(
+    "What was the 27th design parameter you provided?",
+    { maxResults: 20, maxTokens: 8192 },
+  );
+  const item = packet.items.find((candidate) => candidate.memory.id === source.archival.id);
+
+  assert.ok(item?.excerpt);
+  assert.match(item.excerpt, /27\. Design parameter 27/);
+  await nemos.close();
+});
+
+test("v0.7.5 personal calculations exclude unsupported assistant prices", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const source = await user.ingest([
+    "User: I paid $60 for a taxi from the airport to my hotel.",
+    "Assistant: A bus could cost about $29 for that route.",
+  ].join("\n"), { skipAnalysis: true, contentDate: "2023-05-26T10:00:00Z" });
+  await user.write({
+    layer: "semantic",
+    type: "reference",
+    content: "A bus could cost about $29 for that route.",
+    archival_ref: source.archival.id,
+    source_event_ids: [source.archival.id],
+    source: { authoritative: false, origin: "test:assistant", chain_depth: 1 },
+  });
+
+  const packet = await user.recall(
+    "How much would I save by taking the bus instead of the taxi?",
+    { maxResults: 20, maxTokens: 8192 },
+  );
+  const evidence = packet.items.find((item) => item.memory.id === source.archival.id);
+
+  assert.ok(evidence?.excerpt);
+  assert.match(evidence.excerpt, /paid \$60 for a taxi/);
+  assert.doesNotMatch(evidence.excerpt, /bus could cost about \$29/);
+  assert.ok(packet.items.every((item) => item.memory.type !== "reference"));
+  await nemos.close();
+});
+test("v0.7.5 named-subject cost totals retain user payments and exclude recommendations", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const vet = await user.ingest([
+    "User: Lola's vet consultation cost $50.",
+    "Assistant: Recommended dog beds cost $45, $49, or $50.",
+  ].join("\n"), { skipAnalysis: true, contentDate: "2023-05-21T10:00:00Z" });
+  const medication = await user.ingest([
+    "User: Lola's flea medication cost $25.",
+    "Assistant: A grooming kit could cost $80.",
+  ].join("\n"), { skipAnalysis: true, contentDate: "2023-05-26T10:00:00Z" });
+
+  const packet = await user.recall(
+    "What is the total cost of Lola's vet visit and flea medication?",
+    { maxResults: 20, maxTokens: 8192 },
+  );
+  const vetEvidence = packet.items.find((item) => item.memory.id === vet.archival.id);
+  const medicationEvidence = packet.items.find((item) => item.memory.id === medication.archival.id);
+
+  assert.ok(vetEvidence);
+  assert.ok(medicationEvidence);
+  assert.match(recallText(vetEvidence), /consultation cost \$50/);
+  assert.match(recallText(medicationEvidence), /medication cost \$25/);
+  assert.doesNotMatch(recallText(vetEvidence), /dog beds cost/);
+  assert.doesNotMatch(recallText(medicationEvidence), /grooming kit/);
+  await nemos.close();
+});
+test("v0.7.5 sibling totals expand family-relation evidence terms", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const sisters = await user.ingest(
+    "User: I come from a family with 3 sisters.",
+    { skipAnalysis: true, contentDate: "2023-05-25T10:00:00Z" },
+  );
+  const brother = await user.ingest(
+    "User: I also have a brother.",
+    { skipAnalysis: true, contentDate: "2023-05-26T10:00:00Z" },
+  );
+
+  const packet = await user.recall(
+    "What is the total number of siblings I have?",
+    { maxResults: 20, maxTokens: 8192 },
+  );
+  const sistersEvidence = packet.items.find((item) => item.memory.id === sisters.archival.id);
+  const brotherEvidence = packet.items.find((item) => item.memory.id === brother.archival.id);
+
+  assert.ok(sistersEvidence);
+  assert.ok(brotherEvidence);
+  assert.match(recallText(sistersEvidence), /3 sisters/);
+  assert.match(recallText(brotherEvidence), /a brother/);
+  await nemos.close();
+});
+test("v0.7.5 relative week and weekday phrases create bounded event ranges", () => {
+  assert.deepEqual(
+    planRecallQuery(
+      "Where was the art event I attended two weeks ago?",
+      { now: "2023-02-01T21:37:00Z" },
+    ).time_range,
+    {
+      from: "2023-01-15T00:00:00.000Z",
+      to: "2023-01-21T23:59:59.999Z",
+    },
+  );
+  assert.deepEqual(
+    planRecallQuery(
+      "Which artist did I start listening to last Friday?",
+      { now: "2023-04-05T12:00:00Z" },
+    ).time_range,
+    {
+      from: "2023-03-31T00:00:00.000Z",
+      to: "2023-03-31T23:59:59.999Z",
+    },
+  );
+  assert.deepEqual(
+    planRecallQuery(
+      "Which bike did I service last weekend?",
+      { now: "2023-03-22T12:00:00Z" },
+    ).time_range,
+    {
+      from: "2023-03-18T00:00:00.000Z",
+      to: "2023-03-19T23:59:59.999Z",
+    },
+  );
+});
+
+test("v0.7.5 sibling evidence keeps a relation mentioned at the end of a long turn", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const sisters = await user.ingest(
+    "User: I come from a family with 3 sisters.",
+    { skipAnalysis: true, contentDate: "2023-05-25T10:00:00Z" },
+  );
+  const brother = await user.ingest(
+    "User: I've been noticing some interesting trends in the demographics of the people I interact with, and I was wondering if you could help me find some data on the average gender ratio of book clubs. Do you have any information on that? By the way, I've been attending a weekly book club with 10 females, 4 males, and 1 non-binary person, which got me curious about this. Oh, and I should mention that I have a brother, which might be influencing my social circle dynamics.",
+    { skipAnalysis: true, contentDate: "2023-05-26T10:00:00Z" },
+  );
+
+  const packet = await user.recall(
+    "What is the total number of siblings I have?",
+    { maxResults: 20, maxTokens: 8192 },
+  );
+  const sistersEvidence = packet.items.find((item) => item.memory.id === sisters.archival.id);
+  const brotherEvidence = packet.items.find((item) => item.memory.id === brother.archival.id);
+
+  assert.ok(sistersEvidence);
+  assert.ok(brotherEvidence);
+  assert.match(recallText(sistersEvidence), /3 sisters/);
+  assert.match(recallText(brotherEvidence), /10 females[\s\S]*a brother/);
+  await nemos.close();
+});
+test("v0.7.5 multiple named months do not collapse into one event-time filter", async () => {
+  const plan = planRecallQuery(
+    "What was the page count of the novels I finished in January and March?",
+    { now: "2023-05-30T12:00:00Z" },
+  );
+  assert.equal(plan.time_range, undefined);
+
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const january = await user.ingest(
+    "User: I finished a 416-page novel in January.",
+    { skipAnalysis: true, contentDate: "2023-05-22T10:00:00Z" },
+  );
+  const march = await user.ingest(
+    "User: I finished a 440-page novel in March.",
+    { skipAnalysis: true, contentDate: "2023-05-27T10:00:00Z" },
+  );
+
+  const packet = await user.recall(
+    "What was the page count of the novels I finished in January and March?",
+    { now: "2023-05-30T12:00:00Z", maxResults: 20, maxTokens: 8192 },
+  );
+  const ids = new Set(packet.items.map((item) => item.memory.id));
+  assert.ok(ids.has(january.archival.id));
+  assert.ok(ids.has(march.archival.id));
+  await nemos.close();
+});
+
+test("v0.7.5 current shared facts prefer the latest user statement", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const older = await user.ingest([
+    "User: We have 30 dozen eggs stocked in our refrigerator.",
+    "Assistant: Here are several recipes that use eggs.",
+  ].join("\n"), { skipAnalysis: true, contentDate: "2023-01-11T08:24:00Z" });
+  const newer = await user.ingest([
+    "User: We currently have 20 dozen eggs stocked in our refrigerator.",
+    "Assistant: Here are more refrigerator storage suggestions.",
+  ].join("\n"), { skipAnalysis: true, contentDate: "2023-03-15T12:06:00Z" });
+
+  const packet = await user.recall(
+    "How many dozen eggs do we currently have stocked in our refrigerator?",
+    { now: "2023-05-30T12:00:00Z", maxResults: 20, maxTokens: 8192 },
+  );
+
+  assert.equal(packet.query_plan.intent, "current_fact");
+  assert.deepEqual(packet.query_plan.subject_ids, ["user:self"]);
+  assert.equal(packet.items[0]?.memory.id, newer.archival.id);
+  assert.match(packet.items[0]?.excerpt ?? "", /20 dozen eggs/);
+  assert.ok(packet.items.some((item) => item.memory.id === older.archival.id));
+  await nemos.close();
+});
+
+test("v0.7.5 natural ordinals prioritize the requested assistant turn", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const firstSong = "Verse: C C D E.\nChorus: G G G G A G F.\n".repeat(30);
+  const secondSong = `Here is the second song.\nVerse:\n${"G A B C D E ".repeat(28)}\nChorus: C D E F G A B A G F E D C.\n`;
+  const source = await user.ingest([
+    "User: Create a sad song with notes.",
+    `Assistant: ${firstSong}`,
+    "User: Create a second, more romantic song with notes.",
+    `Assistant: ${secondSong}`,
+  ].join("\n"), { skipAnalysis: true, contentDate: "2023-05-24T18:08:00Z" });
+
+  const packet = await user.recall(
+    "What was the chord progression for the chorus in the second song you created?",
+    { maxResults: 20, maxTokens: 8192 },
+  );
+  const item = packet.items.find((candidate) => candidate.memory.id === source.archival.id);
+
+  assert.ok(item?.excerpt);
+  assert.match(item.excerpt, /C D E F G A B A G F E D C/);
+  await nemos.close();
+});
+test("v0.7.5 a contradictory role premise refuses unrelated team counts", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  await user.write({
+    layer: "personal_semantic",
+    type: "user",
+    content: "I lead a team of 4 engineers in my new role as Senior Software Engineer.",
+    subject: "user:self",
+    predicate: "employment.role",
+    object: "Senior Software Engineer",
+    trustTier: 1,
+    utteranceMode: "literal",
+    source: { authoritative: false, origin: "test:user", chain_depth: 1 },
+  });
+
+  const packet = await user.recall(
+    "How many engineers do I lead in my new role as Software Engineer Manager?",
+  );
+
+  assert.equal(packet.reliable, false);
+  assert.equal(packet.refusal_reason, "no_reliable_memory");
+  assert.equal(packet.items.length, 0);
+  await nemos.close();
+});
+
+test("v0.7.5 single-event relations cannot join unrelated source sessions", async () => {
+  const nemos = createNemos();
+  const user = nemos.forUser("alice");
+  const poster = await user.ingest(
+    "User: I presented a poster on my thesis research project at my first conference.",
+    { skipAnalysis: true, contentDate: "2023-05-20T07:41:00Z" },
+  );
+  const harvard = await user.ingest(
+    "User: I attended Harvard University for a different research conference and saw several education projects.",
+    { skipAnalysis: true, contentDate: "2023-05-22T02:42:00Z" },
+  );
+
+  const packet = await user.recall(
+    "At which university did I present a poster for my undergrad course research project?",
+    { maxResults: 20, maxTokens: 8192 },
+  );
+  const ids = new Set(packet.items.map((item) => item.memory.id));
+
+  assert.ok(ids.has(poster.archival.id));
+  assert.ok(!ids.has(harvard.archival.id));
+  assert.ok(packet.items.every((item) => !recallText(item).includes("Harvard University")));
+  await nemos.close();
+});
+
+function recallText(item: { excerpt?: string; memory: { content: string } }): string {
+  return item.excerpt ?? item.memory.content;
+}

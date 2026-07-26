@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.7.5-alpha.17
+
+- Kept complete family-relation statements in bounded evidence excerpts for aggregate kinship questions.
+- Reached 89.8% overall accuracy in the full 500-question, shared-reader LongMemEval comparison with zero generation or judge errors.
+
+## 0.7.5-alpha.16
+
+- Resolved relative week, weekday, and weekend expressions to bounded calendar ranges before recall.
+- Preserved family-relation evidence near the end of long conversational turns.
+
+## 0.7.5-alpha.15
+
+- Preferred user-authored payment evidence for named-subject cost totals so assistant price recommendations cannot contaminate arithmetic.
+- Expanded sibling and music-release vocabulary during evidence retrieval so semantically equivalent family and media terms remain recallable.
+
+## 0.7.5-alpha.14
+
+- Reserved a wider evidence window for an explicitly requested conversational turn so answers are not truncated at the excerpt boundary.
+
+## 0.7.5-alpha.13
+
+- Resolved natural assistant-turn ordinals from the user request that initiated each response, tolerating multi-part assistant continuations.
+- Scored single-event relation groups from personal evidence only so unrelated assistant references cannot manufacture a relationship.
+
+## 0.7.5-alpha.12
+
+- Rejected query premises that contradict the current structured role claim instead of returning unrelated counts.
+- Kept single-event relation answers inside one source session to prevent unsupported cross-session joins.
+- Preserved natural assistant-turn ordinals through long-text segmentation so requested later turns remain visible.
+
+## 0.7.5-alpha.11
+
+- Treated shared first-person language such as we and our as user evidence and prioritized the latest unstructured statement for current facts.
+- Kept multi-month questions out of a misleading single-month event-time filter.
+- Selected natural ordinal assistant turns, such as the second generated song, before building bounded evidence excerpts.
+- Balanced concise derived facts ahead of authoritative source excerpts while preserving source coverage.
+
+## 0.7.5-alpha.10
+
+- Expanded current and compositional recall beyond a single exact claim so multi-source calculations retain all required evidence.
+- Recognized temporal comparisons, standalone month names, and ordinal lookups during query planning and evidence projection.
+- Removed assistant recommendations from first-person calculations when they are not supported as user facts.
+- Added regression coverage for multi-source current facts, temporal order, long numbered lists, month filtering, and unsupported price comparisons.
+
 ## 0.7.5-alpha.9
 
 - Expanded compositional recall so authoritative sources cannot be crowded out by lower-ranked derived candidates.

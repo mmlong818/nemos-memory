@@ -101,7 +101,7 @@ export function planRecallQuery(
     algorithm_version: RECALL_ALGORITHM_VERSION,
     query: normalized,
     intent,
-    layers: options.layers ?? layersForIntent(intent),
+    layers: options.layers ?? layersForIntent(intent, normalized),
     scopes,
     subject_ids: subjectIds,
     predicates,
@@ -139,6 +139,9 @@ export class RecallService {
     };
     const scope = plan.scopes.length === 0 ? undefined : plan.scopes.length === 1 ? plan.scopes[0] : plan.scopes;
     const claimChannel = await this.runChannel("claim", () => this.claimCandidates(plan));
+    if (contradictsQueriedRole(plan, claimChannel.memories)) {
+      return this.emptyPacket(plan, started, "no_reliable_memory");
+    }
     const channelTasks: Array<Promise<ChannelResult>> = [
       Promise.resolve(claimChannel),
       this.runChannel("fts", () =>
@@ -153,6 +156,7 @@ export class RecallService {
         )),
     ];
     const hasExactClaim = plan.claim_keys.length > 0 && !plan.include_historical && !plan.time_range
+      && !isCompositionalQuery(plan.query)
       && claimChannel.memories.some((memory) => admissionFailure(memory, plan, recallOptions) === null);
     let queryVector: Promise<Float32Array> | null = null;
     if (this.options.embedding && !hasExactClaim) {
@@ -233,7 +237,7 @@ export class RecallService {
       }
     }
 
-    if (plan.include_evidence && !hasTargetClaim(items, plan)) {
+    if (plan.include_evidence && (isCompositionalQuery(plan.query) || !hasTargetClaim(items, plan))) {
       const evidence = await this.runChannel("evidence", () =>
         this.evidenceCandidates(plan, recallOptions, queryVector ?? undefined));
       evidence.memories = rankEvidenceCandidates(
@@ -249,6 +253,8 @@ export class RecallService {
       items = mergeEvidenceFallback(items, evidence.memories, plan);
     }
 
+    items = filterPersonalCompositionalNoise(items, plan, rejected);
+    items = enforceSingleEventRelationIntegrity(items, plan, rejected);
     items = this.prioritizeExplicitUpdates(items, plan);
     items = projectOversizedItems(items, plan);
     items = applyPacketBudget(items, plan, rejected);
@@ -373,7 +379,7 @@ export class RecallService {
     const candidates = rankEvidenceCandidates(semantic, lexical);
     if (plan.intent === "current_fact") {
       const eligible = candidates.filter(isCurrentEvidenceEligible);
-      if (plan.claim_keys.length === 0) return eligible.slice(0, limit);
+      if (plan.claim_keys.length === 0 || compositional) return eligible.slice(0, limit);
       return eligible
         .sort((left, right) => {
           const rightSequence = this.options.storage.getEventMetadata(right.id)?.event_seq ?? 0;
@@ -442,7 +448,7 @@ export class RecallService {
     return memories;
   }
   private prioritizeExplicitUpdates(items: RecallItem[], plan: QueryPlan): RecallItem[] {
-    if (plan.include_historical || !/还要|还会|是否还|仍然|依然|anymore|still\b/i.test(plan.query)) return items;
+    if (plan.include_historical || (plan.intent !== "current_fact" && !/还要|还会|是否还|仍然|依然|anymore|still\b/i.test(plan.query))) return items;
     const sourceTime = (memory: Memory): string => {
       const sourceIds = memory.archival_ref
         ? [memory.archival_ref]
@@ -524,13 +530,31 @@ export class RecallService {
 function inferIntent(query: string): RecallIntent {
   if (/以前|过去|曾经|当时|历史|去年|上个月|之前|formerly|previously|history/i.test(query)) return "historical_fact";
   if (/怎么|如何|步骤|流程|办法|方法|how\s+to/i.test(query)) return "procedure";
+  if (isTemporalCompositionQuery(query)) return "episode";
   if (/发生|做了什么|会议|讨论|刚才|昨天|今天|上周|上个月|when|what happened/i.test(query)) return "episode";
-  if (/现在|目前|当前|如今|现居|是什么|多少|哪里|哪儿|叫什么|current|now|what is/i.test(query)) return "current_fact";
+  if (/现在|目前|当前|如今|现居|是什么|多少|哪里|哪儿|叫什么|current|currently|now|what is/i.test(query)) return "current_fact";
   return "general";
 }
 
-function layersForIntent(intent: RecallIntent): Layer[] {
-  if (intent === "current_fact") return ["personal_semantic", "semantic"];
+function contradictsQueriedRole(plan: QueryPlan, claimMemories: Memory[]): boolean {
+  if (plan.include_historical || !plan.predicates.includes("employment.role")) return false;
+  const expectedRole = plan.query.match(/\b(?:role|job)\s+as\s+([A-Za-z][A-Za-z ]{2,60}?)(?=[?.!,]|$)/i)?.[1];
+  if (!expectedRole) return false;
+  const normalizedExpected = comparableEvidenceText(expectedRole);
+  const currentRoles = claimMemories
+    .filter((memory) => memory.predicate === "employment.role")
+    .map((memory) => comparableEvidenceText(
+      typeof memory.object_json === "string" ? memory.object_json : JSON.stringify(memory.object_json ?? ""),
+    ))
+    .filter(Boolean);
+  return currentRoles.length > 0 && !currentRoles.includes(normalizedExpected);
+}
+function layersForIntent(intent: RecallIntent, query = ""): Layer[] {
+  if (intent === "current_fact") {
+    return isCompositionalQuery(query)
+      ? ["personal_semantic", "episodic", "semantic"]
+      : ["personal_semantic", "semantic"];
+  }
   if (intent === "historical_fact") return ["episodic", "personal_semantic", "semantic"];
   if (intent === "episode") return ["episodic", "semantic", "personal_semantic"];
   if (intent === "procedure") return ["procedural", "semantic"];
@@ -539,7 +563,7 @@ function layersForIntent(intent: RecallIntent): Layer[] {
 
 function inferSubjects(query: string): string[] {
   const explicit = [...query.matchAll(/subject:([\w:.-]+)/gi)].map((match) => match[1]!).filter(Boolean);
-  if (/我|我的|本人|自己|\bi\b|\bme\b|\bmy\b/i.test(query)) explicit.push("user:self");
+  if (/我|我的|本人|自己|\bi\b|\bme\b|\bmy\b|\bmine\b|\bwe\b|\bus\b|\bour\b/i.test(query)) explicit.push("user:self");
   return unique(explicit);
 }
 
@@ -611,6 +635,14 @@ function inferTimeRange(query: string, nowValue?: string): RecallTimeRange | und
     const month = names.indexOf(namedMonth[1]!.toLowerCase());
     return { from: new Date(Date.UTC(year, month, 1)).toISOString(), to: new Date(Date.UTC(year, month + 1, 1) - 1).toISOString() };
   }
+  const namedMonthPattern = /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/gi;
+  const namedMonths = unique([...query.matchAll(namedMonthPattern)].map((match) => match[1]!.toLowerCase()));
+  if (namedMonths.length === 1) {
+    const names = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+    const month = names.indexOf(namedMonths[0]!);
+    const year = month > now.getUTCMonth() ? now.getUTCFullYear() - 1 : now.getUTCFullYear();
+    return { from: new Date(Date.UTC(year, month, 1)).toISOString(), to: new Date(Date.UTC(year, month + 1, 1) - 1).toISOString() };
+  }
   const exactYear = query.match(/\b(20\d{2})(?:年)?\b/);
   if (exactYear) {
     const year = Number(exactYear[1]);
@@ -618,6 +650,28 @@ function inferTimeRange(query: string, nowValue?: string): RecallTimeRange | und
   }
   if (/最近\s*24\s*小时|past\s*24\s*hours/i.test(query)) {
     return { from: new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(), to: now.toISOString() };
+  }
+  const relativeOffset = query.match(/\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(days?|weeks?)\s+ago\b/i);
+  if (relativeOffset) {
+    const quantity = parseRelativeQuantity(relativeOffset[1]!);
+    const days = quantity * (/^week/i.test(relativeOffset[2]!) ? 7 : 1);
+    const toleranceDays = /^week/i.test(relativeOffset[2]!) ? 3 : 0;
+    const target = new Date(now.getTime() - days * 86400000);
+    const from = dayRange(new Date(target.getTime() - toleranceDays * 86400000)).from;
+    const to = dayRange(new Date(target.getTime() + toleranceDays * 86400000)).to;
+    return { from, to };
+  }
+  if (/\blast Friday\b/i.test(query)) {
+    const daysSinceFriday = ((now.getUTCDay() - 5 + 7) % 7) || 7;
+    return dayRange(new Date(now.getTime() - daysSinceFriday * 86400000));
+  }
+  if (/\b(?:last|past) weekend\b/i.test(query)) {
+    const daysSinceSunday = ((now.getUTCDay() + 7) % 7) || 7;
+    const sunday = new Date(now.getTime() - daysSinceSunday * 86400000);
+    return {
+      from: dayRange(new Date(sunday.getTime() - 86400000)).from,
+      to: dayRange(sunday).to,
+    };
   }
   if (/今天|today/i.test(query)) return dayRange(now);
   if (/昨天|yesterday/i.test(query)) return dayRange(new Date(now.getTime() - 24 * 60 * 60 * 1000));
@@ -638,6 +692,12 @@ function inferTimeRange(query: string, nowValue?: string): RecallTimeRange | und
   return undefined;
 }
 
+function parseRelativeQuantity(value: string): number {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric;
+  return ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+    .indexOf(value.toLowerCase()) + 1;
+}
 function dayRange(value: Date): RecallTimeRange {
   const from = new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
   return { from: from.toISOString(), to: new Date(from.getTime() + 86400000 - 1).toISOString() };
@@ -775,11 +835,82 @@ function isPersonalFactQuery(plan: QueryPlan): boolean {
 
 function personalFactWeight(memory: Memory, plan: QueryPlan): number {
   if (!isPersonalFactQuery(plan)) return 1;
+  if (isCompositionalQuery(plan.query) && prefersUserEvidence(plan.query)) {
+    if (memory.source.authoritative) return 1.55;
+    if (memoryRepresentsUser(memory)) return 1.45;
+    if (memory.type === "reference" || memory.layer === "procedural") return 0.4;
+  }
   if (memoryRepresentsUser(memory)) return 1.35;
   if (memory.type === "reference") return 0.7;
   return 1;
 }
 
+function filterPersonalCompositionalNoise(
+  items: RecallItem[],
+  plan: QueryPlan,
+  rejected: RecallRejection[],
+): RecallItem[] {
+  if (
+    !isPersonalFactQuery(plan)
+    && !(isCompositionalQuery(plan.query) && prefersUserEvidenceForProjection(plan.query))
+  ) {
+    return items;
+  }
+  if (!isCompositionalQuery(plan.query) || !prefersUserEvidenceForProjection(plan.query)) {
+    return items;
+  }
+  const hasPersonalEvidence = items.some((item) =>
+    item.memory.source.authoritative || memoryRepresentsUser(item.memory));
+  if (!hasPersonalEvidence) return items;
+  return items.filter((item) => {
+    const isAssistantReference = !memoryRepresentsUser(item.memory)
+      && (item.memory.type === "reference" || item.memory.layer === "procedural");
+    if (!isAssistantReference) return true;
+    rejected.push({ memory_id: item.memory.id, reason: "not_personal_evidence" });
+    return false;
+  });
+}
+
+function enforceSingleEventRelationIntegrity(
+  items: RecallItem[],
+  plan: QueryPlan,
+  rejected: RecallRejection[],
+): RecallItem[] {
+  if (!isSingleEventRelationQuery(plan.query) || items.length < 2) return items;
+  const groups = new Map<string, RecallItem[]>();
+  for (const item of items) {
+    const sourceId = item.memory.layer === "archival"
+      ? item.memory.id
+      : item.memory.archival_ref ?? item.memory.source_event_ids?.[0] ?? item.memory.id;
+    const group = groups.get(sourceId) ?? [];
+    group.push(item);
+    groups.set(sourceId, group);
+  }
+  if (groups.size < 2) return items;
+  const terms = unique(
+    (evidenceLexicalQuery(plan.query).toLowerCase().match(/[a-z0-9_]{3,}|[\p{Script=Han}]{2,}/gu) ?? []),
+  );
+  const rankedGroups = [...groups.entries()].map(([sourceId, group]) => {
+    const personalItems = group.filter((item) =>
+      item.memory.source.authoritative || memoryRepresentsUser(item.memory));
+    const searchable = personalItems.map((item) => recallItemContent(item)).join(" ").toLowerCase();
+    const coverage = terms.filter((term) => searchable.includes(term)).length;
+    return { sourceId, group, score: coverage * 100 + group.reduce((sum, item) => sum + item.score, 0) };
+  }).sort((left, right) => right.score - left.score);
+  const selected = new Set(rankedGroups[0]!.group.map((item) => item.memory.id));
+  for (const item of items) {
+    if (!selected.has(item.memory.id)) {
+      rejected.push({ memory_id: item.memory.id, reason: "cross_event_relation" });
+    }
+  }
+  return items.filter((item) => selected.has(item.memory.id));
+}
+
+function isSingleEventRelationQuery(query: string): boolean {
+  return !isCompositionalQuery(query)
+    && prefersUserEvidence(query)
+    && /\b(?:at which|which|what|where)\b.{0,120}\b(?:did i|i (?:presented|visited|attended|bought|used|met|worked|stayed))\b/i.test(query);
+}
 function memoryRepresentsUser(memory: Memory): boolean {
   if (memory.utterance_mode && memory.utterance_mode !== "literal") return false;
   if (memory.type === "user") return true;
@@ -861,7 +992,15 @@ function evidenceLexicalQuery(query: string): string {
       .map((term) => normalizeEvidenceTerm(term))
       .filter((term) => !stopWords.has(term) && !/^20\d{2}$/.test(term)),
   );
-  return filtered.length > 0 ? filtered.join(" ") : query;
+  const expanded = [...filtered];
+  if (/\bsiblings?\b|兄弟姐妹|手足/i.test(query)) {
+    expanded.push("sibling", "brother", "sister");
+  }
+  if (/\b(?:albums?|eps?|records?)\b|专辑|唱片/i.test(query)) {
+    expanded.push("album", "ep", "record", "vinyl", "downloaded", "bought", "purchased");
+  }
+  const termsWithSynonyms = unique(expanded);
+  return termsWithSynonyms.length > 0 ? termsWithSynonyms.join(" ") : query;
 }
 
 function normalizeEvidenceTerm(term: string): string {
@@ -940,7 +1079,7 @@ function mergeEvidenceFallback(items: RecallItem[], evidence: Memory[], plan: Qu
   }
   // Reserve early packet slots for authoritative sources, including sources
   // already present at a low fused rank.
-  const evidenceIndex = Math.min(5, direct.length);
+  const evidenceIndex = compositional ? Math.min(2, direct.length) : Math.min(5, direct.length);
   return [
     ...direct.slice(0, evidenceIndex),
     ...promoted,
@@ -1085,7 +1224,7 @@ function projectOversizedItems(items: RecallItem[], plan: QueryPlan): RecallItem
 
 function buildEvidenceExcerpt(content: string, query: string, maxChars = 2400): string {
   const compositional = isCompositionalQuery(query);
-  const preferUser = prefersUserEvidence(query);
+  const preferUser = prefersUserEvidenceForProjection(query);
   if (content.length <= maxChars && !preferUser) return content;
   const terms = unique(
     (evidenceLexicalQuery(query).toLowerCase().match(/[a-z0-9_]{3,}|[\p{Script=Han}]{2,}/gu) ?? []),
@@ -1094,21 +1233,40 @@ function buildEvidenceExcerpt(content: string, query: string, maxChars = 2400): 
     .split(/\n(?=(?:User|Assistant|System|Tool):\s)/g)
     .map((segment) => segment.trim())
     .filter(Boolean);
+  const sequenceOrdinal = referencedSequenceOrdinal(query);
+  const userTurnIndexes = segments
+    .map((segment, index) => /^User:\s/i.test(segment) ? index : -1)
+    .filter((index) => index >= 0);
+  const requestedUserTurnIndex = sequenceOrdinal === null
+    ? undefined
+    : userTurnIndexes[sequenceOrdinal - 1];
+  const requestedAssistantTurn = requestedUserTurnIndex === undefined
+    ? undefined
+    : segments.slice(requestedUserTurnIndex + 1).find((segment) => /^Assistant:\s/i.test(segment));
+  const requestedTurnParts = new Set(
+    requestedAssistantTurn ? splitCompositionalSegment(requestedAssistantTurn) : [],
+  );
   if (compositional) segments = segments.flatMap(splitCompositionalSegment);
   if (segments.length > 1) {
     let ranked = segments
-      .map((segment, index) => ({ index, segment, score: scoreEvidenceSegment(segment, terms, query) }))
+      .map((segment, index) => ({
+        index,
+        segment,
+        requested: requestedTurnParts.has(segment),
+        score: scoreEvidenceSegment(segment, terms, query) + (requestedTurnParts.has(segment) ? 1_000 : 0),
+      }))
       .filter((candidate) => candidate.score > 0)
       .sort((left, right) => right.score - left.score || right.index - left.index);
+
     const userCandidates = ranked.filter((candidate) => /^User:\s/i.test(candidate.segment));
     if (preferUser && userCandidates.length > 0) ranked = userCandidates;
     const selected: Array<{ index: number; text: string }> = [];
     let remaining = maxChars;
-    const targetSpan = compositional ? 360 : 700;
+    const targetSpan = compositional && !isKinshipAggregateQuery(query) ? 360 : 700;
     const maxSpans = compositional ? 10 : 6;
     for (const candidate of ranked) {
       const separatorLength = selected.length === 0 ? 0 : 5;
-      const spanLimit = Math.min(targetSpan, remaining - separatorLength);
+      const spanLimit = Math.min(candidate.requested ? 700 : targetSpan, remaining - separatorLength);
       if (spanLimit < 100) break;
       const excerpt = bestEvidenceWindow(candidate.segment, terms, spanLimit, query);
       selected.push({ index: candidate.index, text: excerpt });
@@ -1232,15 +1390,31 @@ function bestEvidenceWindow(content: string, terms: string[], maxChars: number, 
   return `${bestStart > 0 ? "..." : ""}${body}${bestStart + maxChars < content.length ? "..." : ""}`;
 }
 
+function referencedSequenceOrdinal(query: string): number | null {
+  const words = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"];
+  const match = query.match(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\b/i);
+  return match ? words.indexOf(match[1]!.toLowerCase()) + 1 : null;
+}
+
 function referencedOrdinal(query: string): string | null {
-  return query.match(/\b(\d+)(?:st|nd|rd|th)\b/i)?.[1] ?? null;
+  return query.match(/\b(\d+)(?:st|nd|rd|th)\b/i)?.[1]
+    ?? query.match(/\b(?:number|item|parameter|entry)\s+#?(\d+)\b/i)?.[1]
+    ?? null;
 }
 
 function prefersUserEvidence(query: string): boolean {
-  const asksAboutSelf = /我|我的|本人|自己|\b(?:i|me|my|mine)\b/i.test(query);
+  const asksAboutSelf = /我|我的|本人|自己|\b(?:i|me|my|mine|we|us|our|ours)\b/i.test(query);
   if (!asksAboutSelf) return false;
-  const asksAboutAssistant = /(?:你|您).{0,24}(?:说|告诉|提供|推荐|建议|列出|分配|解释)|\b(?:you|your)\b.{0,50}\b(?:said|told|provided|recommended|suggested|listed|allocated|gave|called|described|explained)\b|\b(?:our|the) previous (?:chat|conversation)\b/i.test(query);
-  return !asksAboutAssistant;
+  return !asksAboutAssistantEvidence(query);
+}
+
+function prefersUserEvidenceForProjection(query: string): boolean {
+  return prefersUserEvidence(query)
+    || (isMoneyQuery(query) && !asksAboutAssistantEvidence(query));
+}
+
+function asksAboutAssistantEvidence(query: string): boolean {
+  return /(?:你|您).{0,24}(?:说|告诉|提供|推荐|建议|列出|分配|解释)|\b(?:you|your)\b.{0,50}\b(?:said|told|provided|recommended|suggested|listed|allocated|gave|called|described|explained)\b|\b(?:our|the) previous (?:chat|conversation)\b/i.test(query);
 }
 
 function isMoneyQuery(query: string): boolean {
@@ -1263,16 +1437,23 @@ function hasTemporalSignal(content: string): boolean {
   return /\b(?:20\d{2}(?:[-/.]\d{1,2}){0,2}|January|February|March|April|May|June|July|August|September|October|November|December|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|today|yesterday|last week|last month|last weekend|\d+\s+(?:days?|weeks?|months?|years?)\s+ago)\b|今天|昨天|上周|上个月|周末|\d{1,2}月\d{1,2}日/i.test(content);
 }
 
+function isKinshipAggregateQuery(query: string): boolean {
+  return isAggregateQuery(query)
+    && /\b(?:siblings?|brothers?|sisters?)\b|兄弟姐妹|手足/i.test(query);
+}
 function isAggregateQuery(query: string): boolean {
   return /\b(?:how many|how much|total|sum|all|before|after|between|combined|altogether)\b|多少|总共|合计|之前|之后|之间/i.test(query);
 }
 
 function isTemporalCompositionQuery(query: string): boolean {
-  return /\b(?:order|earliest|latest|how long|how many (?:days|weeks|months|years)|days? passed|weeks? (?:ago|had passed)|when did i|from earliest|starting from the earliest|compared to)\b|顺序|最早|最晚|多久|相隔|经过|早到晚|先后/i.test(query);
+  return /\b(?:order|earliest|latest|how long|how old\b.{0,40}\bwhen|how many (?:days|weeks|months|years)|days? passed|weeks? (?:ago|had passed)|when did i|which\b.{0,80}\bfirst|what\b.{0,80}\bfirst|most recently|from earliest|starting from the earliest|compared to)\b|顺序|最早|最晚|多久|多大.{0,20}时|相隔|经过|早到晚|先后|哪个.{0,20}先/i.test(query);
 }
 
 function isCompositionalQuery(query: string): boolean {
-  return isAggregateQuery(query) || isTemporalCompositionQuery(query);
+  return isAggregateQuery(query)
+    || isTemporalCompositionQuery(query)
+    || referencedOrdinal(query) !== null
+    || referencedSequenceOrdinal(query) !== null;
 }
 
 function evidenceSlotLimit(plan: QueryPlan): number {

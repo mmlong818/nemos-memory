@@ -8,7 +8,7 @@ Nemos Memory is built for AI assistants, agents, companion applications, and per
 
 It ships as an embedded TypeScript SDK backed by local SQLite. Applications can integrate it without deploying a separate vector database or memory server.
 
-> Current version: `0.7.5-alpha.9`. Core ingestion, fact evolution, recall, correction, invalidation, isolation, and export flows are available. APIs may still change before the stable release.
+> Current version: `0.7.5-alpha.17`. Core ingestion, fact evolution, recall, correction, invalidation, isolation, and export flows are available. APIs may still change before the stable release.
 
 ## Why Nemos Memory
 
@@ -56,33 +56,30 @@ A new fact value does not erase the old record. Nemos Memory retains history and
 
 ## Formal evaluation
 
-`0.7.5-alpha.8` completed the full 500-question LongMemEval evaluation. All 500 answers were generated successfully, the official judge completed all 500 decisions, and both generation and judge error counts were zero.
+`0.7.5-alpha.17` completed a full 500-question, five-product LongMemEval comparison under identical conditions. Every system completed all 500 questions with zero generation or judge errors. Nemos Memory ranked first with **89.8%** overall accuracy.
 
-| Metric | Result |
-|---|---:|
-| Overall accuracy | **84.6%** |
-| Macro average across six task types | **85.9%** |
-| Abstention accuracy | **86.7%** |
-| Questions with traceable sources | 470 / 500 |
-| At least one source recalled among traceable questions | **100.0%** |
-| All sources recalled among traceable questions | **98.5%** |
-| Search latency P50 | 787 ms |
-| Search latency P95 | 940 ms |
+| Product | Overall accuracy | Six-task macro average | Abstention accuracy | End-to-end P50 |
+|---|---:|---:|---:|---:|
+| **Nemos Memory** | **89.8%** | **91.2%** | **96.7%** | 94.6 s |
+| Hindsight | 79.2% | 78.0% | 96.7% | 29.6 s |
+| Mem0 OSS | 74.6% | 80.8% | 93.3% | 36.8 s |
+| Graphiti OSS | 60.0% | 63.5% | 96.7% | 74.1 s |
+| LangMem | 52.0% | 56.4% | 93.3% | 18.9 s |
 
-| Task type | Accuracy |
+| Nemos Memory task type | Accuracy |
 |---|---:|
-| Single-session user facts | **95.7%** |
-| Single-session preferences | 73.3% |
-| Single-session assistant statements | **94.6%** |
-| Multi-session | 71.4% |
-| Temporal reasoning | **82.7%** |
-| Knowledge update | **97.4%** |
+| Single-session user facts | 97.1% |
+| Single-session preferences | 90.0% |
+| Single-session assistant statements | 96.4% |
+| Multi-session | 82.7% |
+| Temporal reasoning | 88.7% |
+| Knowledge update | 92.3% |
 
 The run used the LongMemEval `oracle` dataset variant, Top-20 recall, the shared external reader `gpt-5.6-terra`, and the official judge model `gpt-4o-2024-08-06`. The track evaluates recalled memory facts without using each product's own agent answerer, so the result measures the ingestion, recall, and evidence-use pipeline rather than complete application intelligence.
 
-Of the remaining 77 failures, 41 lacked sufficient evidence in the recall packet, 32 came from reader or conflict handling, and 4 came from abstention decisions. The next phase prioritizes sparse-evidence coverage for multi-session, preference, and temporal questions.
+Nemos Memory recalled at least one answer source for all 469 traceable questions and recalled every answer source in 94.9% of them. Its isolated search latency was P50 378 ms and P95 640 ms. The clearest engineering weakness is end-to-end ingestion and generation time; an accuracy lead does not imply that the complete product experience already leads.
 
-This is not directly comparable with the public LongMemEval leaderboard because the `oracle` variant and shared external reader define a separate track. Numerical comparisons with [Mem0](https://github.com/mem0ai/mem0), [LangMem](https://github.com/langchain-ai/langmem), and [Graphiti](https://github.com/getzep/graphiti) will only be published after rerunning them with identical data, models, parameters, and judging protocol.
+This is not directly comparable with the public LongMemEval leaderboard because the `oracle` variant and shared external reader define a separate track. [Mem0](https://github.com/mem0ai/mem0), [LangMem](https://github.com/langchain-ai/langmem), [Graphiti](https://github.com/getzep/graphiti), and [Hindsight](https://github.com/vectorize-io/hindsight) were rerun here with the same data, models, parameters, and judging protocol; the numbers apply only to this reproducible protocol.
 
 ## Install
 
