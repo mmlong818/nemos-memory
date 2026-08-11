@@ -31,6 +31,7 @@ export {
   computeMemorySalience,
   ensureMemoryQualityMetadata,
   hasDurableSalience,
+  determinePromotion,
 } from "./salience.js";
 
 // v0.7.1：受控事实身份与确定性规范化。
