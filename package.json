@@ -1,6 +1,6 @@
 {
   "name": "@nemos/sdk",
-  "version": "0.7.5-alpha.17",
+  "version": "0.7.5-alpha.18",
   "description": "Application-agnostic, local-first memory engine for AI systems with provenance, temporal facts, lifecycle reconciliation, and controllable recall.",
   "license": "PolyForm-Noncommercial-1.0.0",
   "author": "nemos founding team",
@@ -25,6 +25,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "prepare": "npm run build",
     "test": "tsx --test tests/unit/*.test.ts tests/integration/*.test.ts tests/v02/unit/*.test.ts tests/v02/integration/*.test.ts tests/v03/unit/*.test.ts tests/v03/integration/*.test.ts tests/v04/unit/*.test.ts tests/v04/integration/*.test.ts tests/v05/unit/*.test.ts tests/v05/integration/*.test.ts tests/v06/integration/*.test.ts tests/v07/integration/*.test.ts",
     "test:unit": "tsx --test tests/unit/*.test.ts tests/v02/unit/*.test.ts tests/v03/unit/*.test.ts tests/v04/unit/*.test.ts tests/v05/unit/*.test.ts",
     "test:v02": "tsx --test tests/v02/unit/*.test.ts tests/v02/integration/*.test.ts",
