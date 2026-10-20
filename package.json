@@ -38,7 +38,7 @@
     "check": "npm run build && npm test"
   },
   "dependencies": {
-    "better-sqlite3": "^11.0.0"
+    "better-sqlite3": "^12.11.1"
   },
   "optionalDependencies": {
     "sqlite-vec": "^0.1.0"
@@ -56,10 +56,10 @@
     }
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
-    "tsx": "^4.7.0",
+    "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^20.10.0",
-    "@types/better-sqlite3": "^7.6.0"
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
   },
   "engines": {
     "node": ">=20"
