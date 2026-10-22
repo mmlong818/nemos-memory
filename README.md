@@ -130,7 +130,7 @@ for (const item of packet.items) {
 await nemos.close();
 ```
 
-LLM 支持 Anthropic、OpenAI、智谱和自定义 Provider。Embedding 可选；未配置时仍可使用结构化、全文和时间检索。
+LLM 支持 Anthropic、OpenAI、智谱和自定义 Provider。Embedding 可选；未配置时仍可使用结构化、全文和时间检索。全文检索对中日文做了分词（Node 内置 `Intl.Segmenter`，无额外依赖），搜「验收」能命中「交付验收标准」；旧库首次打开时会自动重建一次 FTS 索引。
 
 ## 主要接口
 

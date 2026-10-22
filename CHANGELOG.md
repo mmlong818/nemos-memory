@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.5-alpha.19
+
+- Made full-text search usable for Chinese and Japanese. The FTS5 `unicode61` tokenizer treated a whole run of CJK text as one word, so searching "验收" could not find "交付验收标准". Content, entity, and prospective-cue FTS columns now store text segmented with the built-in `Intl.Segmenter` (no new dependency), and queries are segmented the same way. The original text in the main tables is unchanged.
+- Words of three or more characters also index their two-character substrings, and runs of single-character words in a query become a phrase, so "报表" finds "财务报表" and "内核" finds text segmented as 内|核. Lone single characters in a query (的, 是, 我) are treated as noise unless nothing else remains.
+- `findByEntity` matches a CJK entity as a whole phrase instead of any shared word, in line with the in-memory exact-match behavior.
+- Prospective cue FTS fallback now sanitizes its query like the other FTS paths instead of passing it to MATCH verbatim.
+- Existing databases are upgraded on first open: the FTS tables are rebuilt once from the main tables (entity FTS from its own rows) and recorded in a new `nemos_meta` table, so later starts skip the rebuild.
+
 ## 0.7.5-alpha.17
 
 - Kept complete family-relation statements in bounded evidence excerpts for aggregate kinship questions.

@@ -130,7 +130,7 @@ for (const item of packet.items) {
 await nemos.close();
 ```
 
-Anthropic, OpenAI, Zhipu, and custom LLM providers are supported. Embeddings are optional; structured, full-text, and temporal retrieval remain available without them.
+Anthropic, OpenAI, Zhipu, and custom LLM providers are supported. Embeddings are optional; structured, full-text, and temporal retrieval remain available without them. Full-text search segments Chinese and Japanese text with Node's built-in `Intl.Segmenter` (no extra dependency), so "验收" matches "交付验收标准"; existing databases rebuild their FTS index once on first open.
 
 ## Main APIs
 
