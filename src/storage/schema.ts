@@ -6,6 +6,7 @@
 import type Database from "better-sqlite3";
 import { LAYERS } from "../types.js";
 import { listPredicates } from "../claims.js";
+import { rebuildFtsIfNeeded } from "./fts-migrate.js";
 
 export const COMMON_COLS = `
   id              TEXT PRIMARY KEY,
@@ -524,6 +525,8 @@ export function applyMigrations(db: Database.Database): void {
   `);
 
   applyV05Migrations(db);
+  // FTS 文本方案升级（中日文分词）：必须在所有 FTS 虚表建好之后
+  rebuildFtsIfNeeded(db);
 }
 
 /**

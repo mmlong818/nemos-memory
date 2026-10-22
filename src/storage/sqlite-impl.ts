@@ -41,11 +41,13 @@ import type {
   StorylineQuery,
 } from "./types.js";
 import { applyMigrations, tryLoadSqliteVec } from "./schema.js";
+import { segmentForFts } from "./fts-segment.js";
 import {
   bufferToFloat32,
   cosineSimLocal,
   rowToMemory,
   sanitizeFtsQuery,
+  entityPhraseQuery,
   type RowMemory,
 } from "./row-mapper.js";
 import { float32ToBuffer } from "../utils/vector.js";
@@ -210,7 +212,7 @@ export class SqliteStorage implements Storage {
       .prepare(
         `INSERT INTO ${table}_fts (id, tenant_id, user_id, scope, content) VALUES (?, ?, ?, ?, ?)`,
       )
-      .run(m.id, tenantId, userId, m.scope, m.content);
+      .run(m.id, tenantId, userId, m.scope, segmentForFts(m.content));
 
     // entities 写入时同步写 entity FTS
     if (m.entities && m.entities.length > 0) {
@@ -239,7 +241,7 @@ export class SqliteStorage implements Storage {
         `INSERT INTO nemos_entities_fts (record_id, layer, tenant_id, user_id, scope, entities)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(recordId, layer, tenantId, userId, scope, joined);
+      .run(recordId, layer, tenantId, userId, scope, segmentForFts(joined));
   }
 
   insertEmbedding(
@@ -625,7 +627,7 @@ export class SqliteStorage implements Storage {
     opts: { scope?: string; topK?: number; excludeId?: string } = {},
   ): Memory[] {
     const topK = opts.topK ?? 20;
-    const safe = sanitizeFtsQuery(entity);
+    const safe = entityPhraseQuery(entity);
     if (!safe) return [];
     let sql = `
       SELECT record_id, layer

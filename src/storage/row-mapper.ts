@@ -206,16 +206,9 @@ export function cosineSimLocal(a: Float32Array, b: Float32Array): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-export function sanitizeFtsQuery(q: string): string {
-  // FTS5 MATCH 需要安全处理特殊字符。简化策略：split on whitespace + 用 "" 包裹
-  const tokens = q
-    .split(/\s+/)
-    .map((t) => t.replace(/[^\p{L}\p{N}_]/gu, ""))
-    .filter((t) => t.length > 0)
-    .map((t) => `"${t}"`);
-  if (tokens.length === 0) return "";
-  return tokens.join(" OR ");
-}
+// FTS MATCH 查询串处理（含中日文分词）见 fts-segment.ts
+export { sanitizeFtsQuery, entityPhraseQuery } from "./fts-segment.js";
+
 function parseJsonArray(raw: string): string[] {
   try {
     const value = JSON.parse(raw) as unknown;

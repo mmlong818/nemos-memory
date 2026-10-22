@@ -4,6 +4,7 @@ import type Database from "better-sqlite3";
 import type { Prospective } from "../types.js";
 import type { ProspectivePatch } from "./types.js";
 import { bufferToFloat32, cosineSimLocal, float32ToBuffer } from "../utils/vector.js";
+import { sanitizeFtsQuery, segmentForFts } from "./fts-segment.js";
 
 interface ProspectiveRow {
   id: string;
@@ -84,7 +85,7 @@ export function insertProspective(
     db.prepare(`DELETE FROM prospective_cue_fts WHERE id=?`).run(p.id);
     db.prepare(
       `INSERT INTO prospective_cue_fts (id, tenant_id, user_id, cue) VALUES (?,?,?,?)`,
-    ).run(p.id, tenantId, userId, p.cue);
+    ).run(p.id, tenantId, userId, segmentForFts(p.cue));
   });
   tx();
   return p;
@@ -147,13 +148,15 @@ export function searchProspectiveByCue(
     return scored.slice(0, topK);
   }
   // 降级 FTS
+  const safeQuery = sanitizeFtsQuery(query);
+  if (!safeQuery) return [];
   const ftsRows = db
     .prepare(
       `SELECT id, rank FROM prospective_cue_fts
        WHERE tenant_id=? AND user_id=? AND prospective_cue_fts MATCH ?
        ORDER BY rank LIMIT ?`,
     )
-    .all(tenantId, userId, query, topK) as Array<{ id: string; rank: number }>;
+    .all(tenantId, userId, safeQuery, topK) as Array<{ id: string; rank: number }>;
   const out: Array<{ prospective: Prospective; score: number }> = [];
   for (const fr of ftsRows) {
     const p = getProspective(db, tenantId, userId, fr.id);
